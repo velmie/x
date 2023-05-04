@@ -1,6 +1,7 @@
 package authentication_test
 
 import (
+	"context"
 	"crypto"
 	"errors"
 	"testing"
@@ -14,15 +15,16 @@ func TestKeySourceFunc(t *testing.T) {
 	key := crypto.PublicKey(&struct{}{})
 	kid := "testKey"
 
-	keySourceFunc := func(kid string) (crypto.PublicKey, error) {
+	keySourceFunc := func(ctx context.Context, kid string) (crypto.PublicKey, error) {
 		if kid == "testKey" {
 			return key, nil
 		}
 		return nil, errors.New("key not found")
 	}
+	ctx := context.Background()
 
 	ks := authentication.KeySourceFunc(keySourceFunc)
-	result, err := ks.FetchPublicKey(kid)
+	result, err := ks.FetchPublicKey(ctx, kid)
 	assert.NoError(t, err)
 	assert.Equal(t, key, result)
 }
@@ -34,15 +36,16 @@ func TestKeySourceMap(t *testing.T) {
 	ks := authentication.KeySourceMap{
 		kid: key,
 	}
+	ctx := context.Background()
 
 	t.Run("ExistingKey", func(t *testing.T) {
-		result, err := ks.FetchPublicKey(kid)
+		result, err := ks.FetchPublicKey(ctx, kid)
 		assert.NoError(t, err)
 		assert.Equal(t, key, result)
 	})
 
 	t.Run("NonExistingKey", func(t *testing.T) {
-		_, err := ks.FetchPublicKey("nonExisting")
+		_, err := ks.FetchPublicKey(ctx, "nonExisting")
 		assert.Error(t, err)
 		assert.Equal(t, authentication.ErrKeyNotFound, err)
 	})
@@ -54,9 +57,10 @@ func TestSingleKeySource(t *testing.T) {
 	ks := authentication.KeySourceSingle{
 		PublicKey: key,
 	}
+	ctx := context.Background()
 
 	t.Run("FetchPublicKey", func(t *testing.T) {
-		result, err := ks.FetchPublicKey("")
+		result, err := ks.FetchPublicKey(ctx, "")
 		assert.NoError(t, err)
 		assert.Equal(t, key, result)
 	})

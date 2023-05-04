@@ -1,6 +1,7 @@
 package authentication_test
 
 import (
+	"context"
 	"crypto"
 	"errors"
 	"testing"
@@ -22,7 +23,7 @@ type MockKeySource struct {
 	mock.Mock
 }
 
-func (m *MockKeySource) FetchPublicKey(kid string) (crypto.PublicKey, error) {
+func (m *MockKeySource) FetchPublicKey(_ context.Context, kid string) (crypto.PublicKey, error) {
 	args := m.Called(kid)
 	return args.Get(0).(crypto.PublicKey), args.Error(1)
 }
@@ -31,7 +32,7 @@ type MockJWTParser struct {
 	mock.Mock
 }
 
-func (m *MockJWTParser) Parse(token string, keySource authentication.KeySource) (*authentication.JSONWebToken, error) {
+func (m *MockJWTParser) Parse(_ context.Context, token string, keySource authentication.KeySource) (*authentication.JSONWebToken, error) {
 	args := m.Called(token, keySource)
 	return args.Get(0).(*authentication.JSONWebToken), args.Error(1)
 }
@@ -52,7 +53,7 @@ func TestViaJWT_Authenticate(t *testing.T) {
 		viaJWT := authentication.NewViaJWT(
 			jwtParser,
 			keySource,
-			authentication.JWTWithHook(func(token *authentication.JSONWebToken) error {
+			authentication.JWTWithHook(func(ctx context.Context, token *authentication.JSONWebToken) error {
 				token.Claims["custom_claim"] = customClaim
 				return nil
 			}),
@@ -71,8 +72,10 @@ func TestViaJWT_Authenticate(t *testing.T) {
 			Signature: []byte("very_secure_signature_here"),
 			Valid:     true,
 		}
+		ctx := context.Background()
+
 		jwtParser.On("Parse", fakeToken, keySource).Return(jsonWebToken, nil)
-		entity, err := viaJWT.Authenticate(fakeToken)
+		entity, err := viaJWT.Authenticate(ctx, fakeToken)
 
 		assert.NoError(t, err)
 		assert.Equal(t, expectedEntity, entity)
@@ -83,12 +86,13 @@ func TestViaJWT_Authenticate(t *testing.T) {
 		keySource := new(MockKeySource)
 		jwtParser := authentication.NewJWTv5Parser(&jwt.Parser{})
 		viaJWT := authentication.NewViaJWT(jwtParser, keySource)
+		ctx := context.Background()
 
-		invalidToken := "your_invalid_jwt_token_here"
+		invalidToken := "invalid_jwt"
 
 		keySource.On("FetchPublicKey", mock.Anything).Return(nil, errors.New("not found"))
 
-		entity, err := viaJWT.Authenticate(invalidToken)
+		entity, err := viaJWT.Authenticate(ctx, invalidToken)
 
 		assert.Nil(t, entity)
 		assert.Error(t, err)
@@ -107,6 +111,7 @@ func TestJWTv5Parser_Parse(t *testing.T) {
 		)
 		keySource := new(MockKeySource)
 		jwtParser := authentication.NewJWTv5Parser(jwt.NewParser())
+		ctx := context.Background()
 
 		key, err := jwt.ParseECPrivateKeyFromPEM([]byte(ec256Pem))
 		if err != nil {
@@ -115,7 +120,7 @@ func TestJWTv5Parser_Parse(t *testing.T) {
 
 		keySource.On("FetchPublicKey", kid).Return(key.Public(), nil)
 
-		jsonWebToken, err := jwtParser.Parse(validToken, keySource)
+		jsonWebToken, err := jwtParser.Parse(ctx, validToken, keySource)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, jsonWebToken)
@@ -127,11 +132,12 @@ func TestJWTv5Parser_Parse(t *testing.T) {
 		keySource := new(MockKeySource)
 		jwtParser := authentication.NewJWTv5Parser(&jwt.Parser{})
 
-		invalidToken := "invalid_jwt_token_here"
+		invalidToken := "invalid_jwt"
 
 		keySource.On("FetchPublicKey", mock.Anything).Return(nil, errors.New("not found"))
 
-		jsonWebToken, err := jwtParser.Parse(invalidToken, keySource)
+		ctx := context.Background()
+		jsonWebToken, err := jwtParser.Parse(ctx, invalidToken, keySource)
 
 		assert.Nil(t, jsonWebToken)
 		assert.Error(t, err)

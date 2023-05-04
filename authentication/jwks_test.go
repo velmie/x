@@ -1,7 +1,9 @@
 package authentication_test
 
 import (
+	"context"
 	"crypto/ecdsa"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -42,6 +44,7 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestKeySourceJWKS_FetchPublicKey(t *testing.T) {
 	client := &MockHTTPClient{}
 	body := strings.NewReader(jwksJSON)
+	ctx := context.Background()
 
 	client.On("Do", mock.Anything).Return(&http.Response{
 		StatusCode: http.StatusOK,
@@ -56,7 +59,7 @@ func TestKeySourceJWKS_FetchPublicKey(t *testing.T) {
 
 	t.Run("successful fetch", func(t *testing.T) {
 		_, _ = body.Seek(0, io.SeekStart)
-		key, err := keySource.FetchPublicKey("test-kid")
+		key, err := keySource.FetchPublicKey(ctx, "test-kid")
 		assert.NoError(t, err)
 		assert.NotNil(t, key)
 		assert.IsType(t, &ecdsa.PublicKey{}, key)
@@ -64,7 +67,7 @@ func TestKeySourceJWKS_FetchPublicKey(t *testing.T) {
 
 	t.Run("unknown key", func(t *testing.T) {
 		_, _ = body.Seek(0, io.SeekStart)
-		key, err := keySource.FetchPublicKey("unknown-kid")
+		key, err := keySource.FetchPublicKey(ctx, "unknown-kid")
 		assert.Equal(t, authentication.ErrKeyNotFound, err)
 		assert.Nil(t, key)
 	})
@@ -83,13 +86,13 @@ func TestKeySourceJWKS_FetchPublicKey(t *testing.T) {
 
 		for i := 0; i < 5; i++ {
 			_, _ = body.Seek(0, io.SeekStart)
-			key, err := keySource2.FetchPublicKey("unknown-kid")
+			key, err := keySource2.FetchPublicKey(ctx, "unknown-kid")
 			assert.Equal(t, authentication.ErrKeyNotFound, err)
 			assert.Nil(t, key)
 		}
 	})
 
-	t.Run("request rate limit and warning", func(t *testing.T) {
+	t.Run("request rate limit", func(t *testing.T) {
 		_, _ = body.Seek(0, io.SeekStart)
 		client2 := &MockHTTPClient{}
 		client2.On("Do", mock.Anything).Return(&http.Response{
@@ -97,21 +100,15 @@ func TestKeySourceJWKS_FetchPublicKey(t *testing.T) {
 			Body:       io.NopCloser(body),
 		}, nil).Once()
 
-		warnCalled := false
 		options := &authentication.JWKSOptions{
 			Client:              client2,
 			RequestOnUnknownKID: true,
-			WarnFunc: func(msg string) {
-				assert.Contains(t, msg, "rate limit")
-				warnCalled = true
-			},
 		}
 		options.SetRefreshRateLimit(1, time.Minute)
 		keySource2 := createKeySourceJWKS(options)
 
-		_, err := keySource2.FetchPublicKey("unknown-kid")
-		assert.Equal(t, authentication.ErrKeyNotFound, err)
-		assert.True(t, warnCalled)
+		_, err := keySource2.FetchPublicKey(ctx, "unknown-kid")
+		assert.Equal(t, authentication.ErrKeyNotFound, errors.Unwrap(err))
 	})
 
 }

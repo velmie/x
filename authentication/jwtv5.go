@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -39,7 +40,7 @@ func NewJWTv5Parser(parser *jwt.Parser) *JWTv5Parser {
 }
 
 // Parse parses a given token and returns a JSONWebToken
-func (p *JWTv5Parser) Parse(token string, keySource KeySource) (*JSONWebToken, error) {
+func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySource) (*JSONWebToken, error) {
 	parsedToken, err := p.parser.Parse(token, func(token *jwt.Token) (any, error) {
 		kid := ""
 		if kidClaim, ok := token.Header["kid"]; ok {
@@ -51,7 +52,7 @@ func (p *JWTv5Parser) Parse(token string, keySource KeySource) (*JSONWebToken, e
 				)
 			}
 		}
-		publicKey, err := keySource.FetchPublicKey(kid)
+		publicKey, err := keySource.FetchPublicKey(ctx, kid)
 		if err != nil {
 			if errors.Is(err, ErrKeyNotFound) {
 				return nil, fmt.Errorf("key is not found: %w", ErrTokenUnverifiable)

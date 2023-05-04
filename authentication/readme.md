@@ -18,6 +18,7 @@ Here is an example of how to use the ViaJWT:
 package main
 
 import (
+	"context"
 	"crypto"
 	"fmt"
 	"github.com/golang-jwt/jwt/v5"
@@ -35,7 +36,7 @@ func main() {
 		"KV1QifQ.eyJpYXQiOjE2ODMxMTU2MTQsIm5hbWUiOiJKb2huIERvZSIsInN1YiI6IjEyMzQ1Njc4OTAifQ.i7vDxB_hUE-08n3vUCngyyiG6" +
 		"qvvwR5rl1-vDsyqs5MwuXM8wIuAmPITJ3-JY7wCOxy-oSdZ-_joutqdy80mLg"
 
-	entity, err := jwtAuth.Authenticate(token)
+	entity, err := jwtAuth.Authenticate(context.Background(), token)
 	if err != nil {
 		// handle error
 		// ...
@@ -86,7 +87,7 @@ keySource := authentication.KeySourceSingle{
 }
 
 // Use a custom KeySourceFunc
-keySource := authentication.KeySourceFunc(func(kid string) (crypto.PublicKey, error) {
+keySource := authentication.KeySourceFunc(func(ctx context.Context, kid string) (crypto.PublicKey, error) {
 	// Fetch the public key based on the key ID (kid)
 })
 ```
@@ -111,6 +112,7 @@ JWKS is a JSON object that represents a set of keys containing the public keys u
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/velmie/x/authentication"
@@ -121,12 +123,11 @@ import (
 func main() {
 
 	parser := authentication.NewJWTv5Parser(jwt.NewParser())
-	
-	
+
 	jwksOptions := authentication.JWKSOptions{
 		Client:              http.DefaultClient, // customize http client (default: http.DefaultClient)
 		RefreshInterval:     3 * time.Minute,    // customize keys refresh interval (default: 1 * time.Minute)
-		RequestOnUnknownKID: true, // whether to request unknown kid from JWKS endpoint (default: false)
+		RequestOnUnknownKID: true,               // whether to request unknown kid from JWKS endpoint (default: false)
 		WarnFunc: func(msg string) {
 			fmt.Printf("WARN: %s\n", msg) // optional warning function (default: nil)
 		},
@@ -134,7 +135,7 @@ func main() {
 
 	// enable rate limiting for requests to JWKS endpoint (default: no limit)
 	jwksOptions.SetRefreshRateLimit(5, time.Minute) // 5 requests per minute
-		
+
 	keySource := authentication.NewKeySourceJWKS("https://example.com/.well-known/jwks.json", &jwksOptions)
 
 	jwtAuth := authentication.NewViaJWT(parser, keySource)
@@ -143,7 +144,7 @@ func main() {
 		"KV1QifQ.eyJpYXQiOjE2ODMxMTU2MTQsIm5hbWUiOiJKb2huIERvZSIsInN1YiI6IjEyMzQ1Njc4OTAifQ.i7vDxB_hUE-08n3vUCngyyiG6" +
 		"qvvwR5rl1-vDsyqs5MwuXM8wIuAmPITJ3-JY7wCOxy-oSdZ-_joutqdy80mLg"
 
-	entity, err := jwtAuth.Authenticate(token)
+	entity, err := jwtAuth.Authenticate(context.Background(), token)
 	if err != nil {
 		// handle error
 		// ...

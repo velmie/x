@@ -32,7 +32,6 @@ type KeySourceJWKS struct {
 	warnFunc            func(string)
 	mu                  sync.RWMutex
 	rl                  *rateLimiter
-	ctx                 context.Context
 	started             bool
 	cancel              func()
 }
@@ -83,20 +82,24 @@ func NewKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
 		url:             jwksURL,
 		keys:            make(map[string]crypto.PublicKey),
 		rl:              new(rateLimiter),
-		ctx:             ctx,
 		cancel:          cancel,
 	}
 	if len(options) > 0 {
 		options[0].apply(source)
 	}
 
-	source.startRefreshingKeys()
+	source.startRefreshingKeys(ctx)
 
 	return source
 }
 
 // FetchPublicKey fetches the public key with the specified kid
-func (k *KeySourceJWKS) FetchPublicKey(kid string) (crypto.PublicKey, error) {
+func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.PublicKey, error) {
+	select {
+	default:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	k.mu.RLock()
 	if key, ok := k.keys[kid]; ok {
 		k.mu.RUnlock()
@@ -108,12 +111,9 @@ func (k *KeySourceJWKS) FetchPublicKey(kid string) (crypto.PublicKey, error) {
 		return nil, ErrKeyNotFound
 	}
 
-	if err := k.requestKeys(); err != nil {
+	if err := k.requestKeys(ctx); err != nil {
 		if errors.Is(err, errRateLimitExceeded) {
-			if k.warnFunc != nil {
-				k.warnFunc(fmt.Sprintf("%s: caused by the key id '%s'", err, kid))
-			}
-			return nil, ErrKeyNotFound
+			return nil, fmt.Errorf("%w: %s: caused by the key id '%s'", ErrKeyNotFound, kid, err)
 		}
 		return nil, fmt.Errorf("failed to request keys: %w", err)
 	}
@@ -128,12 +128,17 @@ func (k *KeySourceJWKS) FetchPublicKey(kid string) (crypto.PublicKey, error) {
 }
 
 // requestKeys requests the JWKS and updates the local keys
-func (k *KeySourceJWKS) requestKeys() error {
+func (k *KeySourceJWKS) requestKeys(ctx context.Context) error {
+	select {
+	default:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return k.rl.Exec(func() error {
 		k.mu.Lock()
 		defer k.mu.Unlock()
 
-		req, err := http.NewRequestWithContext(k.ctx, http.MethodGet, k.url, http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, http.NoBody)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -184,11 +189,10 @@ func (k *KeySourceJWKS) Stop() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.cancel()
-	k.ctx = context.Background()
 }
 
 // startRefreshingKeys starts refreshing keys
-func (k *KeySourceJWKS) startRefreshingKeys() {
+func (k *KeySourceJWKS) startRefreshingKeys(ctx context.Context) {
 	k.mu.Lock()
 
 	if k.started {
@@ -198,7 +202,7 @@ func (k *KeySourceJWKS) startRefreshingKeys() {
 	k.started = true
 	k.mu.Unlock()
 	refreshFunc := func() {
-		if err := k.requestKeys(); err != nil {
+		if err := k.requestKeys(ctx); err != nil {
 			if k.warnFunc != nil {
 				k.warnFunc(fmt.Sprintf("failed to request keys: %s", err))
 			}
@@ -206,11 +210,13 @@ func (k *KeySourceJWKS) startRefreshingKeys() {
 	}
 	refreshFunc() // initial request
 	go func() {
+		timer := time.NewTimer(k.refreshInterval)
 		for {
+			timer.Reset(k.refreshInterval)
 			select {
-			case <-k.ctx.Done():
+			case <-ctx.Done():
 				return
-			case <-time.After(k.refreshInterval):
+			case <-timer.C:
 				refreshFunc()
 			}
 		}

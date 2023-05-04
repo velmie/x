@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -15,14 +16,14 @@ type JSONWebToken struct {
 }
 
 type JWTParser interface {
-	Parse(token string, keySource KeySource) (*JSONWebToken, error)
+	Parse(ctx context.Context, token string, keySource KeySource) (*JSONWebToken, error)
 }
 
 // ViaJWT is used in order to authenticate entity by the given JWT
 type ViaJWT struct {
 	keySource KeySource
 	parser    JWTParser
-	hook      func(token *JSONWebToken) error
+	hook      func(ctx context.Context, token *JSONWebToken) error
 }
 
 // ViaJWTOption is used in order to configure ViaJWT
@@ -38,8 +39,13 @@ func NewViaJWT(parser JWTParser, keySource KeySource, options ...ViaJWTOption) *
 }
 
 // Authenticate is used in order to authenticate entity by the given token
-func (v *ViaJWT) Authenticate(token string) (Entity, error) {
-	parsedToken, err := v.parser.Parse(token, v.keySource)
+func (v *ViaJWT) Authenticate(ctx context.Context, token string) (Entity, error) {
+	select {
+	default:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	parsedToken, err := v.parser.Parse(ctx, token, v.keySource)
 	if err != nil {
 		if errors.Is(err, ErrTokenUnverifiable) {
 			return nil, err
@@ -47,7 +53,7 @@ func (v *ViaJWT) Authenticate(token string) (Entity, error) {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
 	}
 	if v.hook != nil {
-		if err = v.hook(parsedToken); err != nil {
+		if err = v.hook(ctx, parsedToken); err != nil {
 			return nil, err
 		}
 	}
@@ -58,7 +64,7 @@ func (v *ViaJWT) Authenticate(token string) (Entity, error) {
 }
 
 // JWTWithHook is used in order to set custom verification function
-func JWTWithHook(hook func(token *JSONWebToken) error) ViaJWTOption {
+func JWTWithHook(hook func(ctx context.Context, token *JSONWebToken) error) ViaJWTOption {
 	return func(v *ViaJWT) {
 		v.hook = hook
 	}
