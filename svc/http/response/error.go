@@ -29,6 +29,16 @@ const (
 	TargetField = "field"
 )
 
+// Error creates an errors response
+func Error(errs ...*HTTPError) Errors {
+	return Errors{Errors: errs}
+}
+
+// Errors represents a set of errors in the response payload
+type Errors struct {
+	Errors []*HTTPError `json:"errors"`
+}
+
 // HTTPError is a custom error type designed to handle HTTP errors
 type HTTPError struct {
 	// Code is a unique code identifying the type of error
