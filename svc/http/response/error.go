@@ -7,8 +7,8 @@ const (
 	ErrCodeInvalidRequestParameter = "INVALID_REQUEST_PARAMETER"
 	// ErrCodeRequiredRequestParameter is the error code used when a request parameter is required but missing.
 	ErrCodeRequiredRequestParameter = "REQUIRED_REQUEST_PARAMETER"
-	// ErrCodeNotAllowed is the error code used when the operation is not allowed, often due to insufficient permissions.
-	ErrCodeNotAllowed = "NOT_ALLOWED"
+	// ErrCodeForbidden is the error code used when the operation is not allowed, often due to insufficient permissions.
+	ErrCodeForbidden = "FORBIDDEN"
 	// ErrCodeExpired is the error code used when the resource being accessed has expired.
 	ErrCodeExpired = "EXPIRED"
 	// ErrCodeExhausted is the error code used when a resource limit has been exhausted.
@@ -19,6 +19,12 @@ const (
 	ErrCodeUnauthorized = "UNAUTHORIZED"
 	// ErrCodeInternalServerError is the error code used when an unhandled error occurs on the server.
 	ErrCodeInternalServerError = "INTERNAL_SERVER_ERROR"
+	// ErrCodeInvalidRequestBody is the error code used when the request body is invalid or malformed.
+	ErrCodeInvalidRequestBody = "INVALID_REQUEST_BODY"
+	// ErrCodeMissingRequestBody is the error code used when a request body is expected but not provided.
+	ErrCodeMissingRequestBody = "MISSING_REQUEST_BODY"
+	// ErrCodeJSONSyntax is the error code used when there's a JSON syntax error in the request.
+	ErrCodeJSONSyntax = "JSON_SYNTAX"
 )
 
 // Constants used for specifying the error target

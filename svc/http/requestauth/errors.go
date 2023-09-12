@@ -1,4 +1,4 @@
-package auth
+package requestauth
 
 // Error defines string error
 type Error string

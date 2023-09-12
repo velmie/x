@@ -1,4 +1,4 @@
-package authentication_test
+package authx_test
 
 import (
 	"context"
@@ -12,11 +12,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/velmie/x/svc/authentication"
+	"github.com/velmie/x/svc/authx"
 )
 
 func TestJWTMethodOptionsValidation(t *testing.T) {
@@ -24,90 +25,90 @@ func TestJWTMethodOptionsValidation(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		options []authentication.JWTMethodOption
+		options []authx.JWTMethodOption
 		wantErr bool
 	}{
 		{
 			name:    "Default options. JWT public key is required.",
-			options: []authentication.JWTMethodOption{},
+			options: []authx.JWTMethodOption{},
 			wantErr: true,
 		},
 		{
 			name: "JWKS enabled.",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
 			},
 			wantErr: false,
 		},
 		{
 			name: "JWKS disabled with JWT public key",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWTPublicKey(key.Public()),
+			options: []authx.JWTMethodOption{
+				authx.WithJWTPublicKey(key.Public()),
 			},
 			wantErr: false,
 		},
 
 		{
 			name: "JWKS with invalid rate limit",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimit(-1), // Неверное значение
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimit(-1), // Неверное значение
 			},
 			wantErr: true,
 		},
 		{
 			name: "JWKS with valid rate limit 0 - disabled",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimit(0),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimit(0),
 			},
 			wantErr: false,
 		},
 		{
 			name: "JWKS with valid rate limit",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimit(5),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimit(5),
 			},
 			wantErr: false,
 		},
 		{
 			name: "JWKS with invalid duration",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimitDuration(-1), // Неверное значение
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimitDuration(-1), // Неверное значение
 			},
 			wantErr: true,
 		},
 		{
 			name: "JWKS with valid duration 0 - disabled",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimitDuration(0),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimitDuration(0),
 			},
 			wantErr: false,
 		},
 		{
 			name: "JWKS with valid duration",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSRequestRateLimitDuration(1 * time.Minute),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSRequestRateLimitDuration(1 * time.Minute),
 			},
 			wantErr: false,
 		},
 		{
 			name: "JWKS with invalid retries count",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSMaxRetries(0), // Неверное значение
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSMaxRetries(0), // Неверное значение
 			},
 			wantErr: true,
 		},
 		{
 			name: "JWKS with valid retries count",
-			options: []authentication.JWTMethodOption{
-				authentication.WithJWKSSource(&url.URL{Path: "/test"}),
-				authentication.WithJWKSMaxRetries(5),
+			options: []authx.JWTMethodOption{
+				authx.WithJWKSSource(&url.URL{Path: "/test"}),
+				authx.WithJWKSMaxRetries(5),
 			},
 			wantErr: false,
 		},
@@ -115,8 +116,8 @@ func TestJWTMethodOptionsValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := append(tc.options, authentication.WithLogger(&mockLogger{}))
-			_, err := authentication.NewJWTMethod(opts...)
+			opts := append(slices.Clone(tc.options), authx.WithLogger(&mockLogger{}))
+			_, err := authx.NewJWTMethod(opts...)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("NewJWTMethod() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -154,25 +155,25 @@ func TestSources(t *testing.T) {
 
 	endpoint, _ := url.Parse(ts.URL)
 
-	m := createJWTMethod(t, true, authentication.WithJWKSSource(endpoint))
+	m := createJWTMethod(t, true, authx.WithJWKSSource(endpoint))
 
 	t.Run("JWKS valid token", func(t *testing.T) {
 		entity, err := m.Authenticate(context.Background(), validToken)
 		if err != nil {
-			t.Fatalf("m.Authenticate(...) unexpected error: %s", err)
+			t.Fatalf("m.InjectAuth(...) unexpected error: %s", err)
 		}
 		if len(entity) != 3 || entity["iss"] != "velmie/x/svc/authentication" {
-			t.Errorf("m.Authenticate(...), got invalid entity values: %v", entity)
+			t.Errorf("m.InjectAuth(...), got invalid entity values: %v", entity)
 		}
 	})
 
 	t.Run("JWKS unknown key id", func(t *testing.T) {
 		_, err := m.Authenticate(context.Background(), validTokenUnknownKID)
 		if err == nil {
-			t.Fatalf("m.Authenticate(...) error is expected, got nil")
+			t.Fatalf("m.InjectAuth(...) error is expected, got nil")
 		}
 		if !strings.Contains(err.Error(), "key is not found") {
-			t.Errorf("m.Authenticate(...) unexpected error: %s", err)
+			t.Errorf("m.InjectAuth(...) unexpected error: %s", err)
 		}
 	})
 
@@ -182,15 +183,15 @@ func TestSources(t *testing.T) {
 	withFallback := createJWTMethod(
 		t,
 		true,
-		authentication.WithJWKSSource(endpoint),
-		authentication.WithJWTPublicKey(&pk.PublicKey),
-		authentication.WithLogger(logger),
+		authx.WithJWKSSource(endpoint),
+		authx.WithJWTPublicKey(&pk.PublicKey),
+		authx.WithLogger(logger),
 	)
 
 	t.Run("unknown key id should fallback to the given key", func(t *testing.T) {
 		_, err := withFallback.Authenticate(context.Background(), validTokenUnknownKID)
 		if err != nil {
-			t.Fatalf("m.Authenticate(...) unexpected error: %s", err)
+			t.Fatalf("m.InjectAuth(...) unexpected error: %s", err)
 		}
 		if len(logger.WarningMsgs) == 0 {
 			t.Errorf("expected warning message when falling back to the given key source")
@@ -198,12 +199,12 @@ func TestSources(t *testing.T) {
 	})
 }
 
-func createJWTMethod(t *testing.T, withJWKS bool, options ...authentication.JWTMethodOption) authentication.Method {
+func createJWTMethod(t *testing.T, withJWKS bool, options ...authx.JWTMethodOption) authx.Method {
 	sourceReady := make(chan struct{})
 	if withJWKS {
-		options = append(options, authentication.WithJWKSSourceReadySignal(sourceReady))
+		options = append(options, authx.WithJWKSSourceReadySignal(sourceReady))
 	}
-	m, err := authentication.NewJWTMethod(options...)
+	m, err := authx.NewJWTMethod(options...)
 	if err != nil {
 		t.Fatalf("authentication.NewJWTMethod(...) unexpected error: %s", err)
 	}
@@ -233,7 +234,7 @@ func jwksHandler(w http.ResponseWriter, _ *http.Request) {
     }
   ]
 }`)
-	w.Write(response)
+	_, _ = w.Write(response)
 }
 
 func parseECDSAPublicKeyFromPrivateKey(key string) (*ecdsa.PrivateKey, error) {

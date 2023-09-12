@@ -1,4 +1,4 @@
-package auth
+package requestauth
 
 func EqString(eqValue string) Verifier {
 	return func(value any) (error, bool) {

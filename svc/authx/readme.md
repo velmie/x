@@ -17,7 +17,7 @@ multiple JWT signing methods and allowing for flexible authentication mechanisms
 import (
 "context"
 "fmt"
-"github.com/velmie/x/svc/authentication"
+"github.com/velmie/x/svc/authx"
 "net/url"
 )
 

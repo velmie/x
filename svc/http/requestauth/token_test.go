@@ -1,18 +1,18 @@
-package auth_test
+package requestauth_test
 
 import (
 	"errors"
 	"net/http"
 	"testing"
 
-	. "github.com/velmie/x/svc/http/handler/auth"
+	. "github.com/velmie/x/svc/http/requestauth"
 )
 
 func TestBearerTokenExtractor(t *testing.T) {
 	extractor := NewBearerTokenExtractor()
 
 	t.Run("missing Authorization header", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/", nil)
+		req, _ := http.NewRequest("GET", "/", http.NoBody)
 		_, err := extractor.Extract(req)
 		if !errors.Is(err, ErrMissingToken) {
 			t.Fatalf("expected missing token error, got: %v", err)
@@ -20,7 +20,7 @@ func TestBearerTokenExtractor(t *testing.T) {
 	})
 
 	t.Run("Authorization header too short", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/", nil)
+		req, _ := http.NewRequest("GET", "/", http.NoBody)
 		req.Header.Set("Authorization", "Bear")
 		_, err := extractor.Extract(req)
 		if !errors.Is(err, ErrInvalidToken) {
@@ -29,7 +29,7 @@ func TestBearerTokenExtractor(t *testing.T) {
 	})
 
 	t.Run("Authorization header wrong schema", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/", nil)
+		req, _ := http.NewRequest("GET", "/", http.NoBody)
 		req.Header.Set("Authorization", "WrongSchema tokenValue")
 		_, err := extractor.Extract(req)
 		if !errors.Is(err, ErrInvalidToken) {
@@ -38,7 +38,7 @@ func TestBearerTokenExtractor(t *testing.T) {
 	})
 
 	t.Run("correct Authorization header", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/", nil)
+		req, _ := http.NewRequest("GET", "/", http.NoBody)
 		req.Header.Set("Authorization", "Bearer tokenValue")
 		token, err := extractor.Extract(req)
 		if err != nil {

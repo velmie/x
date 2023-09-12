@@ -1,4 +1,4 @@
-package authentication_test
+package authx_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/velmie/x/authentication"
 
-	. "github.com/velmie/x/svc/authentication"
+	. "github.com/velmie/x/svc/authx"
 )
 
 // MockMethod represents a mock authentication method

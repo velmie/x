@@ -1,23 +1,23 @@
-package auth_test
+package requestauth_test
 
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"go.uber.org/mock/gomock"
+	. "github.com/velmie/x/svc/http/requestauth"
+	. "github.com/velmie/x/svc/http/requestauth/mock"
 
-	. "github.com/velmie/x/svc/http/handler/auth"
-	. "github.com/velmie/x/svc/http/handler/auth/mock"
+	"go.uber.org/mock/gomock"
 )
 
 func TestHandler(t *testing.T) {
 	type mocks struct {
-		extractor      *MockTokenExtractor
-		method         *MockMethod
-		successHandler *MockSuccessHandler
-		errHandler     *MockErrorHandler
+		extractor *MockTokenExtractor
+		method    *MockMethod
+		injector  *MockInjector
 	}
 
 	type setupMocks func(m *mocks)
@@ -31,7 +31,6 @@ func TestHandler(t *testing.T) {
 			name: "Failed to extract token",
 			setupMocks: func(m *mocks) {
 				m.extractor.EXPECT().Extract(gomock.Any()).Return("", errors.New("extract error"))
-				m.errHandler.EXPECT().HandleError(gomock.Any(), gomock.Any(), gomock.Any())
 			},
 			expectedError: true,
 		},
@@ -40,16 +39,20 @@ func TestHandler(t *testing.T) {
 			setupMocks: func(m *mocks) {
 				m.extractor.EXPECT().Extract(gomock.Any()).Return("token", nil)
 				m.method.EXPECT().Authenticate(context.Background(), "token").Return(nil, errors.New("auth error"))
-				m.errHandler.EXPECT().HandleError(gomock.Any(), gomock.Any(), gomock.Any())
 			},
 			expectedError: true,
 		},
 		{
-			name: "All assertions pass and HandleSuccess is called",
+			name: "All assertions pass and InjectAuth is called",
 			setupMocks: func(m *mocks) {
+				entity := Entity{"test": "claim"}
 				m.extractor.EXPECT().Extract(gomock.Any()).Return("token", nil)
-				m.method.EXPECT().Authenticate(context.Background(), "token").Return(Entity{}, nil)
-				m.successHandler.EXPECT().HandleSuccess(gomock.Any(), gomock.Any(), gomock.Any())
+				m.method.EXPECT().Authenticate(context.Background(), "token").Return(entity, nil)
+				m.injector.EXPECT().
+					InjectAuth(entity, gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ Entity, _ http.ResponseWriter, r *http.Request) (*http.Request, error) {
+						return r, nil
+					})
 			},
 			expectedError: false,
 		},
@@ -57,21 +60,19 @@ func TestHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
 			m := &mocks{
-				extractor:      NewMockTokenExtractor(ctrl),
-				method:         NewMockMethod(ctrl),
-				successHandler: NewMockSuccessHandler(ctrl),
-				errHandler:     NewMockErrorHandler(ctrl),
+				extractor: NewMockTokenExtractor(ctrl),
+				method:    NewMockMethod(ctrl),
+				injector:  NewMockInjector(ctrl),
 			}
 
 			tt.setupMocks(m)
 
-			h := Handler(m.extractor, m.method, m.successHandler, m.errHandler)
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			h := NewPipeline(m.extractor, m.method, m.injector)
+			req := httptest.NewRequest("GET", "https://example.com", http.NoBody)
 			w := httptest.NewRecorder()
 			h(w, req)
 		})

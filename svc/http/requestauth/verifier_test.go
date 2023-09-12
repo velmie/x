@@ -1,9 +1,9 @@
-package auth_test
+package requestauth_test
 
 import (
 	"testing"
 
-	. "github.com/velmie/x/svc/http/handler/auth"
+	. "github.com/velmie/x/svc/http/requestauth"
 )
 
 func TestEqString(t *testing.T) {
