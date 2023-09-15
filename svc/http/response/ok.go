@@ -1,12 +1,12 @@
 package response
 
 // OK creates a single item response
-func OK(data any) SingleItem {
-	return SingleItem{Data: data}
+func OK[T any](data T) SingleItem[T] {
+	return SingleItem[T]{Data: data}
 }
 
 // OKWithPagination creates a paginated response
-func OKWithPagination(data any, pageSize, pageNumber, totalRecords int64, defaultLimit ...int64) *Paginated {
+func OKWithPagination[T any](data T, pageSize, pageNumber, totalRecords int64, defaultLimit ...int64) *Paginated[T] {
 	limit := getDefaultLimit(defaultLimit)
 
 	if pageSize == 0 {
@@ -19,7 +19,7 @@ func OKWithPagination(data any, pageSize, pageNumber, totalRecords int64, defaul
 		pageNumber = 1
 	}
 
-	return &Paginated{
+	return &Paginated[T]{
 		Pagination: Pagination{
 			CurrentPage: pageNumber,
 			TotalPage:   totalPage,
@@ -31,14 +31,14 @@ func OKWithPagination(data any, pageSize, pageNumber, totalRecords int64, defaul
 }
 
 // SingleItem represents a single data item in the response payload
-type SingleItem struct {
-	Data any `json:"data"`
+type SingleItem[T any] struct {
+	Data T `json:"data"`
 }
 
 // Paginated represents a paginated data set in the response payload
-type Paginated struct {
+type Paginated[T any] struct {
 	Pagination Pagination `json:"pagination"`
-	Data       any        `json:"data"`
+	Data       T          `json:"data"`
 }
 
 // Pagination contains metadata about the paginated data

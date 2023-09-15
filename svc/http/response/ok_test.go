@@ -15,7 +15,7 @@ func TestOKWithPagination(t *testing.T) {
 		pageNumber   int64
 		totalRecords int64
 		defaultLimit []int64
-		want         *Paginated
+		want         *Paginated[any]
 	}{
 		{
 			name:         "Using default values",
@@ -24,7 +24,7 @@ func TestOKWithPagination(t *testing.T) {
 			pageNumber:   0,
 			totalRecords: 100,
 			defaultLimit: []int64{},
-			want: &Paginated{
+			want: &Paginated[any]{
 				Pagination: Pagination{
 					CurrentPage: 1,
 					TotalPage:   1,
@@ -41,7 +41,7 @@ func TestOKWithPagination(t *testing.T) {
 			pageNumber:   2,
 			totalRecords: 100,
 			defaultLimit: []int64{200},
-			want: &Paginated{
+			want: &Paginated[any]{
 				Pagination: Pagination{
 					CurrentPage: 2,
 					TotalPage:   2,
@@ -58,7 +58,7 @@ func TestOKWithPagination(t *testing.T) {
 			pageNumber:   1,
 			totalRecords: 100,
 			defaultLimit: []int64{},
-			want: &Paginated{
+			want: &Paginated[any]{
 				Pagination: Pagination{
 					CurrentPage: 1,
 					TotalPage:   1,
@@ -75,7 +75,7 @@ func TestOKWithPagination(t *testing.T) {
 			pageNumber:   1,
 			totalRecords: 100,
 			defaultLimit: []int64{},
-			want: &Paginated{
+			want: &Paginated[any]{
 				Pagination: Pagination{
 					CurrentPage: 1,
 					TotalPage:   2,
