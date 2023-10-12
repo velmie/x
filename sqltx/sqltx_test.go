@@ -77,6 +77,6 @@ func testDBWithMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 
 type noopLogger struct{}
 
-func (noopLogger) Warning(v ...interface{}) {
+func (noopLogger) Warn(_ string, _ ...any) {
 	return // do nothing
 }

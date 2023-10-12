@@ -33,7 +33,7 @@ type Connection interface {
 
 // Logger specifies simple logg
 type Logger interface {
-	Warning(v ...interface{})
+	Warn(msg string, args ...any)
 }
 
 // DefaultWrapper implements Wrapper with Connection
@@ -72,7 +72,7 @@ func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context
 		if perr := recover(); perr != nil {
 			rbErr := tx.Rollback()
 			if rbErr != nil {
-				g.logger.Warning("sqltx: transaction rollback error: ", rbErr)
+				g.logger.Warn("sqltx: transaction rollback error: " + rbErr.Error())
 			}
 
 			err = fmt.Errorf("panic recovered:\n%g\n%s", perr, stackTrace())
@@ -89,14 +89,14 @@ func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context
 	if err != nil {
 		rbErr := tx.Rollback()
 		if rbErr != nil && strings.Contains(err.Error(), "context canceled") {
-			g.logger.Warning("sqltx: transaction rollback error: ", rbErr)
+			g.logger.Warn("sqltx: transaction rollback error: ", rbErr.Error())
 		}
 		return err
 	}
 
 	cErr := tx.Commit()
 	if cErr != nil {
-		g.logger.Warning("sqltx: transaction commit error: ", cErr)
+		g.logger.Warn("sqltx: transaction commit error: " + cErr.Error())
 	}
 	return err
 }
