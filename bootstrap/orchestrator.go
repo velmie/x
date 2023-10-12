@@ -62,7 +62,7 @@ type Orchestrator struct {
 func NewOrchestrator(opts ...option) *Orchestrator {
 	o := options{
 		signals: []os.Signal{syscall.SIGINT, syscall.SIGTERM},
-		logger:  NewDefaultLogger(),
+		logger:  NewNoopLogger(),
 	}
 
 	for _, opt := range opts {
@@ -95,7 +95,7 @@ func (o *Orchestrator) Serve() (err error) {
 	// stop notifying channel after exit since no listeners will be present
 	defer signal.Stop(o.stopCh)
 
-	o.logger.Info(len(o.services), " services are registered and will be started")
+	o.logger.Info("services are registered", "numberOfServices", len(o.services))
 
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,9 +108,9 @@ func (o *Orchestrator) Serve() (err error) {
 	select {
 	// first startup error is assigned to return result
 	case err = <-errCh:
-		o.logger.Error("stopping services because of error: ", err)
+		o.logger.Error("stopping services because of error: ", "error", err.Error())
 	case sig := <-o.stopCh:
-		o.logger.Info(sig, "has been sent, stopping the services...")
+		o.logger.Info("stopping the services...", "signal", sig.String())
 	}
 
 	cancel()

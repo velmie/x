@@ -3,7 +3,6 @@ package bootstrap_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"syscall"
 	"testing"
@@ -49,7 +48,7 @@ func TestOrchestrator_NoServices(t *testing.T) {
 }
 
 func TestOrchestrator_ServeHTTP(t *testing.T) {
-	svc := NewHTTPService(fmt.Sprintf(":8080"))
+	svc := NewHTTPService(":8080")
 
 	orc := bootstrap.NewOrchestrator(
 		bootstrap.WithStopSignals(syscall.SIGINT),
@@ -59,7 +58,7 @@ func TestOrchestrator_ServeHTTP(t *testing.T) {
 	orc.Register(svc)
 
 	finishCh := make(chan struct{}, 1)
-	errCh := make(chan error)
+	errCh := make(chan error, 1)
 	defer close(errCh) // close so goroutine is stopped
 
 	go func() {
@@ -67,13 +66,6 @@ func TestOrchestrator_ServeHTTP(t *testing.T) {
 			errCh <- err
 		}
 		finishCh <- struct{}{}
-	}()
-
-	// wait for error in parallel channel
-	go func() {
-		for err := range errCh {
-			t.Fatalf("unexpected error is raised from serve function: %v", err)
-		}
 	}()
 
 	const url = "http://localhost:8080"
@@ -91,6 +83,8 @@ func TestOrchestrator_ServeHTTP(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		t.Fatal("failed to shutdown orchestrator within timeout")
+	case err := <-errCh:
+		t.Fatalf("unexpected error is raised from serve function: %v", err)
 	case <-finishCh:
 	}
 
@@ -179,7 +173,7 @@ func TestOrchestrator_ServeMultipleStartupErrors(t *testing.T) {
 }
 
 func TestOrchestrator_Stop(t *testing.T) {
-	svc := NewHTTPService(fmt.Sprintf(":8080"))
+	svc := NewHTTPService(":8080")
 
 	orc := bootstrap.NewOrchestrator(
 		bootstrap.WithStopSignals(syscall.SIGINT),
