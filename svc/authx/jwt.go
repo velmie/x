@@ -59,10 +59,10 @@ var (
 )
 
 type Logger interface {
-	Info(v ...any)
-	Warning(v ...any)
-	Error(v ...any)
-	Debug(v ...any)
+	Info(msg string, v ...any)
+	Warn(msg string, v ...any)
+	Error(msg string, v ...any)
+	Debug(msg string, v ...any)
 }
 
 type JWTSigningMethod = string
@@ -122,7 +122,7 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 		opts := cfg.JWKSOptions
 		retryClient := retryablehttp.NewClient()
 		if log != nil {
-			retryClient.Logger = &loggerKVAdapter{log}
+			retryClient.Logger = log
 		}
 		retryClient.RetryMax = opts.MaxRetries
 
@@ -132,7 +132,7 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 		}
 		if log != nil {
 			jwksOptions.WarnFunc = func(msg string) {
-				log.Warning(fmt.Sprintf("JWKS: %s", msg))
+				log.Warn(fmt.Sprintf("JWKS: %s", msg))
 			}
 		}
 		jwksOptions.SetRefreshRateLimit(opts.RequestRateLimit, opts.RequestRateLimitDuration)
@@ -168,7 +168,7 @@ func fallbackSource(a, b namedKeySource, log Logger) authentication.KeySource {
 			return key, nil
 		}
 		if log != nil {
-			log.Warning(
+			log.Warn(
 				fmt.Sprintf("failed to fetch key using the first key source '%s', fallback to the second key source '%s': %s",
 					a.name,
 					b.name,
@@ -197,42 +197,6 @@ func jwksNonBlocking(endpoint string, options *authentication.JWKSOptions, ready
 
 		return jwksSource.FetchPublicKey(ctx, kid)
 	})
-}
-
-var _ retryablehttp.LeveledLogger = (*loggerKVAdapter)(nil)
-
-type loggerKVAdapter struct {
-	log Logger
-}
-
-func (l loggerKVAdapter) Error(msg string, keysAndValues ...any) {
-	l.log.Error(fmt.Sprintf("%s %s", msg, keysAndValuesToString(keysAndValues)))
-}
-
-func (l loggerKVAdapter) Info(msg string, keysAndValues ...any) {
-	l.log.Info(fmt.Sprintf("%s %s", msg, keysAndValuesToString(keysAndValues)))
-}
-
-func (l loggerKVAdapter) Debug(msg string, keysAndValues ...any) {
-	l.log.Debug(fmt.Sprintf("%s %s", msg, keysAndValuesToString(keysAndValues)))
-}
-
-func (l loggerKVAdapter) Warn(msg string, keysAndValues ...any) {
-	l.log.Warning(fmt.Sprintf("%s %s", msg, keysAndValuesToString(keysAndValues)))
-}
-
-func keysAndValuesToString(keysAndValues []any) string {
-	fields := make([]string, 0, (len(keysAndValues)+2)/2)
-	for i := 0; i < len(keysAndValues); i += 2 {
-		var key string
-		if k, ok := keysAndValues[i].(string); ok {
-			key = k
-		} else {
-			key = fmt.Sprintf("%v", keysAndValues[i])
-		}
-		fields = append(fields, fmt.Sprintf("%s = %v", key, keysAndValues[i+1]))
-	}
-	return strings.Join(fields, ", ")
 }
 
 func validateJWKSOptions(opts *JWKSOptions) error {

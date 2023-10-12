@@ -256,18 +256,18 @@ type mockLogger struct {
 	DebugMsgs   []string
 }
 
-func (ml *mockLogger) Info(v ...any) {
-	ml.InfoMsgs = append(ml.InfoMsgs, fmt.Sprint(v...))
+func (ml *mockLogger) Info(msg string, v ...any) {
+	ml.InfoMsgs = append(ml.InfoMsgs, msg, fmt.Sprint(v...))
 }
 
-func (ml *mockLogger) Warning(v ...any) {
-	ml.WarningMsgs = append(ml.WarningMsgs, fmt.Sprint(v...))
+func (ml *mockLogger) Warn(msg string, v ...any) {
+	ml.WarningMsgs = append(ml.WarningMsgs, msg, fmt.Sprint(v...))
 }
 
-func (ml *mockLogger) Error(v ...any) {
-	ml.ErrorMsgs = append(ml.ErrorMsgs, fmt.Sprint(v...))
+func (ml *mockLogger) Error(msg string, v ...any) {
+	ml.ErrorMsgs = append(ml.ErrorMsgs, msg, fmt.Sprint(v...))
 }
 
-func (ml *mockLogger) Debug(v ...any) {
-	ml.DebugMsgs = append(ml.DebugMsgs, fmt.Sprint(v...))
+func (ml *mockLogger) Debug(msg string, v ...any) {
+	ml.DebugMsgs = append(ml.DebugMsgs, msg, fmt.Sprint(v...))
 }
