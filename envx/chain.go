@@ -253,6 +253,30 @@ func (v *Variable) URL() (*url.URL, error) {
 	return result, nil
 }
 
+// Each converts a variable into a list of variables where each list item is obtained by splitting the original value
+// by a delimiter.
+// By default, the delimiter is a comma ",", but it accepts any string as a delimiter.
+// Converting to a list of variables can be useful if there is a need to validate each item independently.
+func (v *Variable) Each(delimiter ...string) Variables {
+	delim := ","
+	if len(delimiter) > 0 {
+		delim = delimiter[0]
+	}
+	values := strings.Split(v.Val, delim)
+	vars := make(Variables, len(values))
+	for i, val := range values {
+		runners := make([]Runner, len(v.runners))
+		copy(runners, v.runners)
+		vars[i] = &Variable{
+			Name:    v.Name,
+			Val:     val,
+			Exist:   v.Exist,
+			runners: runners,
+		}
+	}
+	return vars
+}
+
 type Runner func(f *Variable) error
 
 func DefaultVal(val string) Runner {
@@ -463,7 +487,7 @@ func ListenAddress(v *Variable) error {
 	if host != "" && validateIPAddress(host) != nil && validateDomainName(host) != nil {
 		return Error{
 			VarName: v.Name,
-			Reason:  err.Error(),
+			Reason:  fmt.Sprintf("%q is not valid host", host),
 			Cause:   ErrInvalidValue,
 		}
 	}

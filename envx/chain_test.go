@@ -534,6 +534,93 @@ func Test_Chain(t *testing.T) {
 					String()
 			},
 		},
+		{
+			env:      "VALID_LIST_OF_URLS_AS_STRING",
+			v:        "http://example.com,http://sub.example.com",
+			expected: []string{"http://example.com", "http://sub.example.com"},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					ValidURL().
+					StringSlice()
+			},
+		},
+		{
+			env:      "VALID_LIST_OF_URLS_AS_STRING_CUSTOM_DELIM",
+			v:        "http://example.com|http://sub.example.com",
+			expected: []string{"http://example.com", "http://sub.example.com"},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each("|").
+					ValidURL().
+					StringSlice()
+			},
+		},
+		{
+			env:      "LIST_OF_URLS_ONE_INVALID",
+			v:        "http://example.com,\tnot valid",
+			expected: ([]string)(nil),
+			err:      ErrInvalidValue,
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					ValidURL().
+					StringSlice()
+			},
+		},
+		{
+			env:      "VALID_PORT_NUMBERS_LIST",
+			v:        "2525,8080,9080",
+			expected: []int{2525, 8080, 9080},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					ValidPortNumber().
+					IntSlice()
+			},
+		},
+		{
+			env:      "VALID_LISTEN_ADDRESS_LIST",
+			v:        "localhost:8080,127.0.0.1:9080",
+			expected: []string{"localhost:8080", "127.0.0.1:9080"},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					ValidListenAddress().
+					StringSlice()
+			},
+		},
+		{
+			env:      "VALID_DURATION_LIST",
+			v:        "3s,5s",
+			expected: []time.Duration{3 * time.Second, 5 * time.Second},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					DurationSlice()
+			},
+		},
+		{
+			env:      "VALID_BOOLEAN_LIST",
+			v:        "true,false,true,T,F",
+			expected: []bool{true, false, true, true, false},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					BooleanSlice()
+			},
+		},
+		{
+			env:      "LIST_WITH_RUNNERS",
+			v:        "val1,val2,val3",
+			expected: []string{"val1", "val2", "val3"},
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					Each().
+					WithRunners(OneOf([]string{"val1", "val2", "val3"})).
+					StringSlice()
+			},
+		},
 	}
 
 	os.Clearenv()
