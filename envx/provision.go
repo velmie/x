@@ -5,6 +5,21 @@ import "errors"
 // Getter represents a function that retrieves a value and possibly returns an error
 type Getter[T any] func() (T, error)
 
+// Default is a helper function which helps to provision default values
+func Default[T any](defaultVal T, v *Variable, g Getter[T]) Getter[T] {
+	return func() (T, error) {
+		gotVal, err := g()
+		if err != nil {
+			return gotVal, err
+		}
+		if !v.Exist {
+			return defaultVal, nil
+		}
+
+		return gotVal, nil
+	}
+}
+
 // Setter represents a function that sets a value and possibly returns an error
 type Setter func() error
 

@@ -155,6 +155,32 @@ func (v *Variable) StringSlice(delimiter ...string) ([]string, error) {
 	return strings.Split(v.Val, delim), nil
 }
 
+func (v *Variable) MapStringString() (map[string]string, error) {
+	const (
+		pairSep = ","
+		kvSep   = "="
+	)
+	if err := doRun(v.runners, v); err != nil {
+		return nil, err
+	}
+	if v.Val == "" {
+		return map[string]string{}, nil
+	}
+	result := make(map[string]string)
+	pairs := strings.Split(v.Val, pairSep)
+
+	for _, pair := range pairs {
+		kv := strings.SplitN(strings.TrimSpace(pair), kvSep, 2)
+		if len(kv) == 2 {
+			key := strings.TrimSpace(kv[0])
+			value := strings.TrimSpace(kv[1])
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
 func (v *Variable) UniqueStringSlice(delimiter ...string) ([]string, error) {
 	result, err := v.StringSlice(delimiter...)
 	if err != nil {
@@ -229,6 +255,24 @@ func (v *Variable) Int64() (int64, error) {
 		return 0, Error{
 			VarName: v.Name,
 			Reason:  fmt.Sprintf("must be a valid integer value, got '%s'", v.Val),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return result, nil
+}
+
+func (v *Variable) Float64() (float64, error) {
+	if err := doRun(v.runners, v); err != nil {
+		return 0, err
+	}
+	if v.Val == "" {
+		return 0, nil
+	}
+	result, err := strconv.ParseFloat(v.Val, 64)
+	if err != nil {
+		return 0, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("must be a valid float value, got '%s'", v.Val),
 			Cause:   ErrInvalidValue,
 		}
 	}

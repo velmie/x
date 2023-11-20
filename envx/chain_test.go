@@ -233,6 +233,24 @@ func Test_Chain(t *testing.T) {
 			},
 		},
 		{
+			env:      "VALID_FLOAT64",
+			v:        "123.456",
+			expected: 123.456,
+			err:      nil,
+			run: func(env string) (interface{}, error) {
+				return Get(env).Float64()
+			},
+		},
+		{
+			env:      "INVALID_FLOAT64",
+			v:        "123.456!",
+			expected: float64(0),
+			err:      ErrInvalidValue,
+			run: func(env string) (interface{}, error) {
+				return Get(env).Float64()
+			},
+		},
+		{
 			env:      "VALID_DURATION",
 			v:        "5m45s",
 			expected: 5*time.Minute + 45*time.Second,
@@ -619,6 +637,39 @@ func Test_Chain(t *testing.T) {
 					Each().
 					WithRunners(OneOf([]string{"val1", "val2", "val3"})).
 					StringSlice()
+			},
+		},
+		{
+			env:      "MAP_STRING_STRING_OK",
+			v:        "attr1=val1, attr2 = value 2,attr3=3",
+			expected: map[string]string{"attr1": "val1", "attr2": "value 2", "attr3": "3"},
+			run: func(env string) (interface{}, error) {
+				return Get(env).MapStringString()
+			},
+		},
+		{
+			env:      "DEFAULT_STRING",
+			expected: "default value",
+			run: func(_ string) (interface{}, error) {
+				v := Get("__not_existing_var__")
+				return Default("default value", v, v.String)()
+			},
+		},
+		{
+			env:      "DEFAULT_MAP_STRING",
+			expected: map[string]string{"some": "value"},
+			run: func(_ string) (interface{}, error) {
+				v := Get("__not_existing_var__")
+				return Default(map[string]string{"some": "value"}, v, v.MapStringString)()
+			},
+		},
+		{
+			env:      "DEFAULT_MAP_STRING_EXIST",
+			v:        "existing=value",
+			expected: map[string]string{"existing": "value"},
+			run: func(env string) (interface{}, error) {
+				v := Get(env)
+				return Default(map[string]string{"some": "value"}, v, v.MapStringString)()
 			},
 		},
 	}
