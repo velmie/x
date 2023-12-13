@@ -60,6 +60,11 @@ func (v *Variable) Default(val string) *Variable {
 	return v
 }
 
+func (v *Variable) ExactLength(val int) *Variable {
+	v.runners = append(v.runners, ExactLength(val))
+	return v
+}
+
 func (v *Variable) WithRunners(runners ...Runner) *Variable {
 	v.runners = append(v.runners, runners...)
 	return v
@@ -545,6 +550,20 @@ func ListenAddress(v *Variable) error {
 	}
 
 	return nil
+}
+
+func ExactLength(val int) Runner {
+	return func(f *Variable) error {
+		if len(f.Val) != val {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be %d characters long", val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		return nil
+	}
 }
 
 func doRun(runners []Runner, v *Variable) error {
