@@ -672,6 +672,38 @@ func Test_Chain(t *testing.T) {
 				return Default(map[string]string{"some": "value"}, v, v.MapStringString)()
 			},
 		},
+		{
+			env:      "VALUE_HAS_TOO_SMALL_LENGTH",
+			v:        "example",
+			expected: "",
+			err:      ErrInvalidValue,
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					ExactLength(8).
+					String()
+			},
+		},
+		{
+			env:      "VALUE_HAS_TOO_BIG_LENGTH",
+			v:        "example",
+			expected: "",
+			err:      ErrInvalidValue,
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					ExactLength(6).
+					String()
+			},
+		},
+		{
+			env:      "VALUE_HAS_EXPECTED_LENGTH",
+			v:        "example",
+			expected: "example",
+			run: func(env string) (interface{}, error) {
+				return Get(env).
+					ExactLength(7).
+					String()
+			},
+		},
 	}
 
 	os.Clearenv()
