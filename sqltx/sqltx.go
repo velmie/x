@@ -96,7 +96,7 @@ func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context
 
 	cErr := tx.Commit()
 	if cErr != nil {
-		g.logger.Warn("sqltx: transaction commit error: " + cErr.Error())
+		return fmt.Errorf("sqltx: transaction commit error: %w", cErr)
 	}
 	return err
 }
