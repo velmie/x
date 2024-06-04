@@ -15,29 +15,16 @@ const resultWaitTimeout = 3 * time.Second
 
 var ErrFailedStartup = errors.New("startup failed")
 
-type HTTPService struct {
-	srv *http.Server
-}
-
-func NewHTTPService(addr string) *HTTPService {
+func NewHTTPService(addr string) *bootstrap.ServerWrapper {
 	mux := http.NewServeMux()
 	mux.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	return &HTTPService{srv: &http.Server{
+	s := &http.Server{
 		Handler: mux,
 		Addr:    addr,
-	}}
-}
-
-func (s *HTTPService) Start() error {
-	return s.srv.ListenAndServe()
-}
-
-func (s *HTTPService) Stop(ctx context.Context) error {
-	// HTTP server raise http.ErrServerClosed from ListenAndServe func after Shutdown is called, nevertheless we omit
-	// check for it since package must resolve it and ignore any errors raised from startup after orchestrator shutdown
-	return s.srv.Shutdown(ctx)
+	}
+	return bootstrap.NewServerWrapper(s)
 }
 
 func TestOrchestrator_NoServices(t *testing.T) {
