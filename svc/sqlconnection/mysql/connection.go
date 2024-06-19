@@ -47,6 +47,11 @@ func NewConnection(cfg *Config, log Logger) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mysql connection is not established: %w", err)
 	}
+	if cfg.TLSConfig != nil {
+		log.Info("TLS DB connection is established")
+	} else {
+		log.Info("DB connection is established")
+	}
 
 	if cfg.MaxIdleConnections == 0 || cfg.MaxOpenConnections == 0 {
 		var (
