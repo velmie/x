@@ -1,6 +1,6 @@
 # mysql
 
-The provides functionality to read DB configuration from environment variables and open an SQL connection
+The package provides functionality to read DB configuration from environment variables and open an SQL connection
 
 ## Read configuration from environment variables
 
