@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-    scheduler := tickrx.New()
+    scheduler := tickrx.NewScheduler()
 
     scheduler.Add(1*time.Second, func(ctx context.Context) {
         fmt.Println("Task executed")
@@ -39,7 +39,7 @@ func main() {
 You can schedule tasks to run at specific intervals. The task function receives a context, enabling it to check for cancellation signals and exit gracefully.
 
 ```go
-scheduler := tickrx.New()
+scheduler := tickrx.NewScheduler()
 
 scheduler.Add(5*time.Second, func(ctx context.Context) {
     select {
@@ -51,28 +51,6 @@ scheduler.Add(5*time.Second, func(ctx context.Context) {
     }
 })
 
-// Stop the scheduler when the program is terminating
+// The Stop method ensures that all running tasks are completed before exiting.
 scheduler.Stop()
-```
-
-### Graceful Shutdown
-
-The `Stop` method ensures that all running tasks are completed before exiting.
-
-```go
-func main() {
-scheduler := tickrx.New()
-
-scheduler.Add(2*time.Second, func (ctx context.Context) {
-fmt.Println("Periodic task running")
-})
-
-go func () {
-time.Sleep(10 * time.Second)
-scheduler.Stop()
-}()
-
-// Wait for all tasks to finish
-scheduler.Stop()
-}
 ```
