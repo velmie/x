@@ -402,10 +402,11 @@ type Config struct {
 - `delimiter(char)`: Delimiter for slice elements (default is comma)
 - `layout(format)`: Time format layout for parsing time.Time fields
 
-#### Validation Method Directives
+#### Custom Method Directives
 
 - `validateMethod(methodName)`: Call a method on the struct to validate the field value
 - `requiredIfMethod(methodName)`: Field is required if the specified method returns true
+- `convertMethod(methodName)`: Call a method on the struct to convert the string value from environment variable to the field type
 
 ### Configuration Options
 
@@ -452,6 +453,9 @@ err := envx.Load(&cfg, envx.WithCustomValidator("email", emailValidator))
 // Or using a struct method
 type Config struct {
     Password string `env:"PASSWORD;validateMethod(ValidatePassword)"`
+    
+    // Using custom conversion method
+    CustomField MyType `env:"CUSTOM_ENV;convertMethod(ConvertToMyType)"`
 }
 
 func (c *Config) ValidatePassword(password string) error {
@@ -459,6 +463,12 @@ func (c *Config) ValidatePassword(password string) error {
         return errors.New("password is too weak")
     }
     return nil
+}
+
+// Custom conversion method takes a string and returns the desired type plus an error
+func (c *Config) ConvertToMyType(value string) (MyType, error) {
+    // Custom parsing logic here
+    return MyType{Value: value}, nil
 }
 ```
 

@@ -192,6 +192,7 @@ type FieldContext struct {
 	FinalNames           []string
 	Directives           []Directive
 	ValidateMethod       string
+	ConvertMethod        string
 	TimeLayout           string
 	Delimiter            string
 	Variable             *Variable
@@ -238,6 +239,10 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 				if len(dir.Params) == 1 {
 					ctx.ValidateMethod = dir.Params[0]
 				}
+			case "convertMethod":
+				if len(dir.Params) == 1 {
+					ctx.ConvertMethod = dir.Params[0]
+				}
 			}
 		}
 	} else {
@@ -277,7 +282,7 @@ func (l *StructLoader) applyDirectives(ctx *FieldContext) error {
 	ctx.Variable = Coalesce(ctx.FinalNames...)
 
 	for _, dir := range ctx.Directives {
-		if dir.Name == "delimiter" || dir.Name == "layout" || dir.Name == "validateMethod" {
+		if dir.Name == "delimiter" || dir.Name == "layout" || dir.Name == "validateMethod" || dir.Name == "convertMethod" {
 			continue
 		}
 
@@ -298,7 +303,19 @@ func (l *StructLoader) setFieldValue(ctx *FieldContext) error {
 	fieldType := ctx.FieldValue.Type()
 	convertedVal := reflect.New(fieldType).Elem()
 
-	if handler, ok := l.typeHandlers[fieldType]; ok {
+	// Check if we should use a custom conversion method
+	if ctx.ConvertMethod != "" {
+		rawValue, err := ctx.Variable.String()
+		if err != nil {
+			return err
+		}
+
+		value, err := CallConvertMethod(ctx.Target, ctx.ConvertMethod, rawValue, fieldType)
+		if err != nil {
+			return fmt.Errorf("conversion failed: %w", err)
+		}
+		convertedVal.Set(reflect.ValueOf(value))
+	} else if handler, ok := l.typeHandlers[fieldType]; ok {
 		value, err := handler.HandleType(ctx)
 		if err != nil {
 			return err
@@ -1316,4 +1333,45 @@ func callValidateMethod(cfg any, methodName string, value any) error {
 		return nil
 	}
 	return errInterface.(error)
+}
+
+var CallConvertMethod = callConvertMethod
+
+func callConvertMethod(cfg any, methodName string, stringValue string, targetType reflect.Type) (any, error) {
+	method := reflect.ValueOf(cfg).MethodByName(methodName)
+	if !method.IsValid() {
+		return nil, fmt.Errorf("conversion method %s not found", methodName)
+	}
+
+	methodType := method.Type()
+
+	if methodType.NumIn() != 1 {
+		return nil, fmt.Errorf("conversion method %s must take exactly one string argument", methodName)
+	}
+	if methodType.NumOut() != 2 ||
+		!methodType.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		return nil, fmt.Errorf("conversion method %s must return (value, error)", methodName)
+	}
+
+	// Ensure the method accepts a string parameter
+	if methodType.In(0).Kind() != reflect.String {
+		return nil, fmt.Errorf("conversion method %s must accept a string parameter", methodName)
+	}
+
+	// Ensure the method returns the correct type
+	if !methodType.Out(0).AssignableTo(targetType) {
+		return nil, fmt.Errorf("conversion method %s returns type %s, but field is of type %s",
+			methodName, methodType.Out(0), targetType)
+	}
+
+	results := method.Call([]reflect.Value{reflect.ValueOf(stringValue)})
+
+	// Handle error
+	errInterface := results[1].Interface()
+	if errInterface != nil {
+		return nil, errInterface.(error)
+	}
+
+	// Return the converted value
+	return results[0].Interface(), nil
 }

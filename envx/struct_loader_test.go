@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1001,25 +1002,88 @@ func TestStructLoader_MultipleErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "is not set")
 }
 
-// TestConfig example struct with methods for testing
+func TestStructLoader_CustomConvertMethod(t *testing.T) {
+	os.Setenv("CUSTOM_VALUE", "one")
+	os.Setenv("CUSTOM_VALUE_NUM", "42")
+	defer func() {
+		os.Unsetenv("CUSTOM_VALUE")
+		os.Unsetenv("CUSTOM_VALUE_NUM")
+	}()
+
+	t.Run("Custom conversion logic", func(t *testing.T) {
+		var cfg SimpleConverter
+		err := envx.Load(&cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, cfg.CustomValue)
+	})
+
+	t.Run("Fallback to standard parsing", func(t *testing.T) {
+		var cfg configWithConverter
+		err := envx.Load(&cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 42, cfg.Value)
+	})
+
+	t.Run("Conversion method error", func(t *testing.T) {
+		os.Setenv("INVALID_VALUE", "invalid")
+		defer os.Unsetenv("INVALID_VALUE")
+
+		var cfg configWithFailingConverter
+		err := envx.Load(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conversion failed")
+	})
+}
+
+type configWithConverter struct {
+	Value int `env:"CUSTOM_VALUE_NUM;convertMethod(ConvertToInt)"`
+}
+
+func (c *configWithConverter) ConvertToInt(s string) (int, error) {
+	return strconv.Atoi(s)
+}
+
+type configWithFailingConverter struct {
+	Value int `env:"INVALID_VALUE;convertMethod(ConvertToInt)"`
+}
+
+func (c *configWithFailingConverter) ConvertToInt(s string) (int, error) {
+	return 0, errors.New("conversion failed")
+}
+
+type SimpleConverter struct {
+	CustomValue int `env:"CUSTOM_VALUE;convertMethod(ConvertToInt)"`
+}
+
+func (c *SimpleConverter) ConvertToInt(value string) (int, error) {
+	switch strings.ToLower(value) {
+	case "one":
+		return 1, nil
+	case "two":
+		return 2, nil
+	case "three":
+		return 3, nil
+	}
+
+	return strconv.Atoi(value)
+}
+
 type TestConfig struct {
 	TLSEnabled     bool   `env:"TLS_ENABLED"`
 	Password       string `env:"PASSWORD;validateMethod(ValidatePassword)"`
 	StrongPassword string `env:"PASSWORD_STRONG;validateMethod(ValidatePassword)"`
+	CustomValue    int    `env:"CUSTOM_VALUE;convertMethod(ConvertToInt)"`
 }
 
-// IsTLSEnabled returns true if TLS is enabled
 func (c *TestConfig) IsTLSEnabled() bool {
 	return c.TLSEnabled
 }
 
-// ValidatePassword validates a password
 func (c *TestConfig) ValidatePassword(password string) error {
 	if len(password) < 10 {
 		return errors.New("password is too weak")
 	}
 
-	// Check for uppercase, lowercase, digit, and special char
 	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(password)
 	hasLower := regexp.MustCompile(`[a-z]`).MatchString(password)
 	hasDigit := regexp.MustCompile(`[0-9]`).MatchString(password)
@@ -1030,4 +1094,17 @@ func (c *TestConfig) ValidatePassword(password string) error {
 	}
 
 	return nil
+}
+
+func (c *TestConfig) ConvertToInt(value string) (int, error) {
+	switch strings.ToLower(value) {
+	case "one":
+		return 1, nil
+	case "two":
+		return 2, nil
+	case "three":
+		return 3, nil
+	}
+
+	return strconv.Atoi(value)
 }
