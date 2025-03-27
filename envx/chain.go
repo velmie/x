@@ -75,48 +75,122 @@ func (v *Variable) MaxLength(max int) *Variable {
 	return v
 }
 
-func (v *Variable) MinInt(min int64) *Variable {
-	v.runners = append(v.runners, MinInt(min))
+// Min applies minimum value validation based on the underlying type.
+// This is a universal method that replaces type-specific min methods.
+func (v *Variable) Min(minVal interface{}) *Variable {
+	switch m := minVal.(type) {
+	case int:
+		v.runners = append(v.runners, MinInt(int64(m)))
+	case int8:
+		v.runners = append(v.runners, MinInt(int64(m)))
+	case int16:
+		v.runners = append(v.runners, MinInt(int64(m)))
+	case int32:
+		v.runners = append(v.runners, MinInt(int64(m)))
+	case int64:
+		v.runners = append(v.runners, MinInt(m))
+	case uint:
+		v.runners = append(v.runners, MinUint(uint64(m)))
+	case uint8:
+		v.runners = append(v.runners, MinUint(uint64(m)))
+	case uint16:
+		v.runners = append(v.runners, MinUint(uint64(m)))
+	case uint32:
+		v.runners = append(v.runners, MinUint(uint64(m)))
+	case uint64:
+		v.runners = append(v.runners, MinUint(m))
+	case float32:
+		v.runners = append(v.runners, MinFloat(float64(m)))
+	case float64:
+		v.runners = append(v.runners, MinFloat(m))
+	}
 	return v
 }
 
-func (v *Variable) MaxInt(max int64) *Variable {
-	v.runners = append(v.runners, MaxInt(max))
+// Max applies maximum value validation based on the underlying type.
+// This is a universal method that replaces type-specific max methods.
+func (v *Variable) Max(maxVal interface{}) *Variable {
+	switch m := maxVal.(type) {
+	case int:
+		v.runners = append(v.runners, MaxInt(int64(m)))
+	case int8:
+		v.runners = append(v.runners, MaxInt(int64(m)))
+	case int16:
+		v.runners = append(v.runners, MaxInt(int64(m)))
+	case int32:
+		v.runners = append(v.runners, MaxInt(int64(m)))
+	case int64:
+		v.runners = append(v.runners, MaxInt(m))
+	case uint:
+		v.runners = append(v.runners, MaxUint(uint64(m)))
+	case uint8:
+		v.runners = append(v.runners, MaxUint(uint64(m)))
+	case uint16:
+		v.runners = append(v.runners, MaxUint(uint64(m)))
+	case uint32:
+		v.runners = append(v.runners, MaxUint(uint64(m)))
+	case uint64:
+		v.runners = append(v.runners, MaxUint(m))
+	case float32:
+		v.runners = append(v.runners, MaxFloat(float64(m)))
+	case float64:
+		v.runners = append(v.runners, MaxFloat(m))
+	}
 	return v
 }
 
-func (v *Variable) IntRange(min, max int64) *Variable {
-	v.runners = append(v.runners, MinInt(min), MaxInt(max))
+// Range applies minimum and maximum value validation based on the underlying type.
+// This is a universal method that replaces type-specific range methods.
+func (v *Variable) Range(minVal, maxVal interface{}) *Variable {
+	v.Min(minVal)
+	v.Max(maxVal)
 	return v
 }
 
-func (v *Variable) MinUint(min uint64) *Variable {
-	v.runners = append(v.runners, MinUint(min))
+// Type-specific range methods for internal use
+
+func (v *Variable) MinInt(mn int64) *Variable {
+	v.runners = append(v.runners, MinInt(mn))
 	return v
 }
 
-func (v *Variable) MaxUint(max uint64) *Variable {
-	v.runners = append(v.runners, MaxUint(max))
+func (v *Variable) MaxInt(mx int64) *Variable {
+	v.runners = append(v.runners, MaxInt(mx))
 	return v
 }
 
-func (v *Variable) UintRange(min, max uint64) *Variable {
-	v.runners = append(v.runners, MinUint(min), MaxUint(max))
+func (v *Variable) IntRange(mn, mx int64) *Variable {
+	v.runners = append(v.runners, MinInt(mn), MaxInt(mx))
 	return v
 }
 
-func (v *Variable) MinFloat(min float64) *Variable {
-	v.runners = append(v.runners, MinFloat(min))
+func (v *Variable) MinUint(mn uint64) *Variable {
+	v.runners = append(v.runners, MinUint(mn))
 	return v
 }
 
-func (v *Variable) MaxFloat(max float64) *Variable {
-	v.runners = append(v.runners, MaxFloat(max))
+func (v *Variable) MaxUint(mx uint64) *Variable {
+	v.runners = append(v.runners, MaxUint(mx))
 	return v
 }
 
-func (v *Variable) FloatRange(min, max float64) *Variable {
-	v.runners = append(v.runners, MinFloat(min), MaxFloat(max))
+func (v *Variable) UintRange(mn, mx uint64) *Variable {
+	v.runners = append(v.runners, MinUint(mn), MaxUint(mx))
+	return v
+}
+
+func (v *Variable) MinFloat(mn float64) *Variable {
+	v.runners = append(v.runners, MinFloat(mn))
+	return v
+}
+
+func (v *Variable) MaxFloat(mx float64) *Variable {
+	v.runners = append(v.runners, MaxFloat(mx))
+	return v
+}
+
+func (v *Variable) FloatRange(mn, mx float64) *Variable {
+	v.runners = append(v.runners, MinFloat(mn), MaxFloat(mx))
 	return v
 }
 
@@ -581,10 +655,10 @@ func URL(v *Variable) error {
 	if v.Val == "" {
 		return nil
 	}
-	if _, err := url.Parse(v.Val); err != nil {
+	if _, err := url.ParseRequestURI(v.Val); err != nil {
 		return Error{
 			VarName: v.Name,
-			Reason:  err.Error(),
+			Reason:  "must be a valid URL value, got '" + v.Val + "'",
 			Cause:   ErrInvalidValue,
 		}
 	}
