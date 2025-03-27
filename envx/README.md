@@ -8,8 +8,8 @@ allows for easy fetching, default setting, type conversion, and conditions check
 * Retrieve environment variables with fallbacks.
 * Set default values.
 * Enforce required variables.
-* Validate variables against a set of conditions.
-* Convert environment variable values to common types (string, boolean, duration, int, etc.)
+* Validate variables against a set of conditions including range validations.
+* Convert environment variable values to common types (string, boolean, duration, int, uint, float types, time.Time, etc.)
 
 ## Usage
 
@@ -46,8 +46,28 @@ chain := envx.Get("MY_VAR").MatchRegexp(regexp.MustCompile("^value-\\d+$"))
 // Ensure the variable is one of a set of values
 chain := envx.Get("MY_VAR").OneOf("value1", "value2", "value3")
 
+// String length validations
+chain := envx.Get("MY_VAR").MinLength(3)
+chain := envx.Get("MY_VAR").MaxLength(10)
+chain := envx.Get("MY_VAR").ExactLength(8)
+
+// Numeric range validations
+chain := envx.Get("MY_INT_VAR").MinInt(5)
+chain := envx.Get("MY_INT_VAR").MaxInt(100)
+chain := envx.Get("MY_INT_VAR").IntRange(5, 100)
+
+// Unsigned integer range validations
+chain := envx.Get("MY_UINT_VAR").MinUint(5)
+chain := envx.Get("MY_UINT_VAR").MaxUint(100)
+chain := envx.Get("MY_UINT_VAR").UintRange(5, 100)
+
+// Float range validations
+chain := envx.Get("MY_FLOAT_VAR").MinFloat(1.5)
+chain := envx.Get("MY_FLOAT_VAR").MaxFloat(99.5)
+chain := envx.Get("MY_FLOAT_VAR").FloatRange(1.5, 99.5)
+
 // Chain multiple validations
-chain := envx.Get("MY_VAR").Required().NotEmpty().MatchRegexp(regexp.MustCompile("^value-\\d+$"))
+chain := envx.Get("MY_VAR").Required().NotEmpty().MatchRegexp(regexp.MustCompile("^value-\\d+$")).MinLength(8)
 
 // .... 
 
@@ -58,10 +78,31 @@ value, err := chain.String()
 Conversions
 
 ```go
+// Basic types
 valueStr, err := envx.Get("MY_STRING_VAR").String()
 valueBool, err := envx.Get("MY_BOOL_VAR").Boolean()
 valueDuration, err := envx.Get("MY_DURATION_VAR").Duration()
+
+// Integer types
 valueInt, err := envx.Get("MY_INT_VAR").Int()
+valueInt64, err := envx.Get("MY_INT64_VAR").Int64()
+
+// Unsigned integer types
+valueUint, err := envx.Get("MY_UINT_VAR").Uint()
+valueUint8, err := envx.Get("MY_UINT8_VAR").Uint8()
+valueUint16, err := envx.Get("MY_PORT_VAR").Uint16()
+valueUint32, err := envx.Get("MY_UINT32_VAR").Uint32()
+valueUint64, err := envx.Get("MY_UINT64_VAR").Uint64()
+
+// Float types
+valueFloat32, err := envx.Get("MY_FLOAT32_VAR").Float32()
+valueFloat64, err := envx.Get("MY_FLOAT64_VAR").Float64()
+
+// Time type
+valueTime, err := envx.Get("MY_TIME_VAR").Time("2006-01-02T15:04:05Z07:00")
+
+// URL
+valueURL, err := envx.Get("MY_URL_VAR").URL()
 ```
 
 ## Prototype
@@ -145,7 +186,7 @@ item of the list.
 For example:
 
 ```go
-    addresses, err := envx.Get("MY_LISTEN_ADDRESSES").Each().ValidListenAddress().StringSlice()
+addresses, err := envx.Get("MY_LISTEN_ADDRESSES").Each().ValidListenAddress().StringSlice()
 if err != nil {
 //...
 }
@@ -155,9 +196,35 @@ if err != nil {
 By default, the delimiter is a comma ",", but it accepts any string as a delimiter.
 
 ```go
-    addresses, err := envx.Get("MY_LISTEN_ADDRESSES").Each("|").ValidListenAddress().StringSlice()
+addresses, err := envx.Get("MY_LISTEN_ADDRESSES").Each("|").ValidListenAddress().StringSlice()
 if err != nil {
 //...
 }
 // ...
+```
+
+The library supports various slice types:
+
+```go
+// String slices
+strSlice, err := envx.Get("MY_STR_LIST").StringSlice() // default delimiter: ","
+strSlice, err := envx.Get("MY_STR_LIST").StringSlice("|") // custom delimiter
+uniqueStrSlice, err := envx.Get("MY_UNIQUE_LIST").UniqueStringSlice()
+
+// Number type slices
+intSlice, err := envx.Get("MY_INT_LIST").IntSlice()
+int64Slice, err := envx.Get("MY_INT64_LIST").Int64Slice()
+uintSlice, err := envx.Get("MY_UINT_LIST").UintSlice() 
+uint8Slice, err := envx.Get("MY_UINT8_LIST").Uint8Slice()
+uint16Slice, err := envx.Get("MY_UINT16_LIST").Uint16Slice()
+uint32Slice, err := envx.Get("MY_UINT32_LIST").Uint32Slice()
+uint64Slice, err := envx.Get("MY_UINT64_LIST").Uint64Slice()
+float32Slice, err := envx.Get("MY_FLOAT32_LIST").Float32Slice()
+float64Slice, err := envx.Get("MY_FLOAT64_LIST").Float64Slice()
+
+// Other types
+boolSlice, err := envx.Get("MY_BOOL_LIST").BooleanSlice()
+durationSlice, err := envx.Get("MY_DURATION_LIST").DurationSlice()
+urlSlice, err := envx.Get("MY_URL_LIST").URLSlice()
+timeSlice, err := envx.Get("MY_TIME_LIST").TimeSlice("2006-01-02")
 ```

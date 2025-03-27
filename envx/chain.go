@@ -65,6 +65,61 @@ func (v *Variable) ExactLength(val int) *Variable {
 	return v
 }
 
+func (v *Variable) MinLength(min int) *Variable {
+	v.runners = append(v.runners, MinLength(min))
+	return v
+}
+
+func (v *Variable) MaxLength(max int) *Variable {
+	v.runners = append(v.runners, MaxLength(max))
+	return v
+}
+
+func (v *Variable) MinInt(min int64) *Variable {
+	v.runners = append(v.runners, MinInt(min))
+	return v
+}
+
+func (v *Variable) MaxInt(max int64) *Variable {
+	v.runners = append(v.runners, MaxInt(max))
+	return v
+}
+
+func (v *Variable) IntRange(min, max int64) *Variable {
+	v.runners = append(v.runners, MinInt(min), MaxInt(max))
+	return v
+}
+
+func (v *Variable) MinUint(min uint64) *Variable {
+	v.runners = append(v.runners, MinUint(min))
+	return v
+}
+
+func (v *Variable) MaxUint(max uint64) *Variable {
+	v.runners = append(v.runners, MaxUint(max))
+	return v
+}
+
+func (v *Variable) UintRange(min, max uint64) *Variable {
+	v.runners = append(v.runners, MinUint(min), MaxUint(max))
+	return v
+}
+
+func (v *Variable) MinFloat(min float64) *Variable {
+	v.runners = append(v.runners, MinFloat(min))
+	return v
+}
+
+func (v *Variable) MaxFloat(max float64) *Variable {
+	v.runners = append(v.runners, MaxFloat(max))
+	return v
+}
+
+func (v *Variable) FloatRange(min, max float64) *Variable {
+	v.runners = append(v.runners, MinFloat(min), MaxFloat(max))
+	return v
+}
+
 func (v *Variable) WithRunners(runners ...Runner) *Variable {
 	v.runners = append(v.runners, runners...)
 	return v
@@ -278,6 +333,103 @@ func (v *Variable) Float64() (float64, error) {
 		return 0, Error{
 			VarName: v.Name,
 			Reason:  fmt.Sprintf("must be a valid float value, got '%s'", v.Val),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return result, nil
+}
+
+func (v *Variable) Float32() (float32, error) {
+	result, err := v.Float64()
+	if err != nil {
+		return 0, err
+	}
+	return float32(result), nil
+}
+
+func (v *Variable) Uint() (uint, error) {
+	result, err := v.Uint64()
+	if err != nil {
+		return 0, err
+	}
+	return uint(result), nil
+}
+
+func (v *Variable) Uint8() (uint8, error) {
+	result, err := v.Uint64()
+	if err != nil {
+		return 0, err
+	}
+	if result > 255 {
+		return 0, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("value %d exceeds uint8 maximum (255)", result),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return uint8(result), nil
+}
+
+func (v *Variable) Uint16() (uint16, error) {
+	result, err := v.Uint64()
+	if err != nil {
+		return 0, err
+	}
+	if result > 65535 {
+		return 0, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("value %d exceeds uint16 maximum (65535)", result),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return uint16(result), nil
+}
+
+func (v *Variable) Uint32() (uint32, error) {
+	result, err := v.Uint64()
+	if err != nil {
+		return 0, err
+	}
+	if result > 4294967295 {
+		return 0, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("value %d exceeds uint32 maximum (4294967295)", result),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return uint32(result), nil
+}
+
+func (v *Variable) Uint64() (uint64, error) {
+	if err := doRun(v.runners, v); err != nil {
+		return 0, err
+	}
+	if v.Val == "" {
+		return 0, nil
+	}
+	result, err := strconv.ParseUint(v.Val, 10, 64)
+	if err != nil {
+		return 0, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("must be a valid unsigned integer value, got '%s'", v.Val),
+			Cause:   ErrInvalidValue,
+		}
+	}
+	return result, nil
+}
+
+func (v *Variable) Time(layout string) (time.Time, error) {
+	if err := doRun(v.runners, v); err != nil {
+		return time.Time{}, err
+	}
+	if v.Val == "" {
+		return time.Time{}, nil
+	}
+	result, err := time.Parse(layout, v.Val)
+	if err != nil {
+		return time.Time{}, Error{
+			VarName: v.Name,
+			Reason:  fmt.Sprintf("must be a valid time in format '%s', got '%s'", layout, v.Val),
 			Cause:   ErrInvalidValue,
 		}
 	}
@@ -562,6 +714,188 @@ func ExactLength(val int) Runner {
 			}
 		}
 
+		return nil
+	}
+}
+
+func MinLength(min int) Runner {
+	return func(f *Variable) error {
+		if len(f.Val) < min {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be at least %d characters long", min),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MaxLength(max int) Runner {
+	return func(f *Variable) error {
+		if len(f.Val) > max {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be no more than %d characters long", max),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MinInt(min int64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseInt(f.Val, 10, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid integer value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val < min {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be greater than or equal to %d", min),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MaxInt(max int64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseInt(f.Val, 10, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid integer value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val > max {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be less than or equal to %d", max),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MinUint(min uint64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseUint(f.Val, 10, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid unsigned integer value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val < min {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be greater than or equal to %d", min),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MaxUint(max uint64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseUint(f.Val, 10, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid unsigned integer value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val > max {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be less than or equal to %d", max),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MinFloat(min float64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseFloat(f.Val, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid float value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val < min {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be greater than or equal to %f", min),
+				Cause:   ErrInvalidValue,
+			}
+		}
+		return nil
+	}
+}
+
+func MaxFloat(max float64) Runner {
+	return func(f *Variable) error {
+		if f.Val == "" {
+			return nil
+		}
+
+		val, err := strconv.ParseFloat(f.Val, 64)
+		if err != nil {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be a valid float value, got '%s'", f.Val),
+				Cause:   ErrInvalidValue,
+			}
+		}
+
+		if val > max {
+			return Error{
+				VarName: f.Name,
+				Reason:  fmt.Sprintf("must be less than or equal to %f", max),
+				Cause:   ErrInvalidValue,
+			}
+		}
 		return nil
 	}
 }
