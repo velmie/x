@@ -38,6 +38,66 @@ func (v Variables) OneOf(values ...string) Variables {
 	return v
 }
 
+func (v Variables) ExactLength(length int) Variables {
+	v.appendRunners(ExactLength(length))
+	return v
+}
+
+func (v Variables) MinLength(min int) Variables {
+	v.appendRunners(MinLength(min))
+	return v
+}
+
+func (v Variables) MaxLength(max int) Variables {
+	v.appendRunners(MaxLength(max))
+	return v
+}
+
+func (v Variables) MinInt(min int64) Variables {
+	v.appendRunners(MinInt(min))
+	return v
+}
+
+func (v Variables) MaxInt(max int64) Variables {
+	v.appendRunners(MaxInt(max))
+	return v
+}
+
+func (v Variables) IntRange(min, max int64) Variables {
+	v.appendRunners(MinInt(min), MaxInt(max))
+	return v
+}
+
+func (v Variables) MinUint(min uint64) Variables {
+	v.appendRunners(MinUint(min))
+	return v
+}
+
+func (v Variables) MaxUint(max uint64) Variables {
+	v.appendRunners(MaxUint(max))
+	return v
+}
+
+func (v Variables) UintRange(min, max uint64) Variables {
+	v.appendRunners(MinUint(min), MaxUint(max))
+	return v
+}
+
+func (v Variables) MinFloat(min float64) Variables {
+	v.appendRunners(MinFloat(min))
+	return v
+}
+
+func (v Variables) MaxFloat(max float64) Variables {
+	v.appendRunners(MaxFloat(max))
+	return v
+}
+
+func (v Variables) FloatRange(min, max float64) Variables {
+	v.appendRunners(MinFloat(min), MaxFloat(max))
+	return v
+}
+
 func (v Variables) Expand() Variables {
 	v.appendRunners(Expand)
 	return v
@@ -84,6 +144,41 @@ func (v Variables) DurationSlice() ([]time.Duration, error) {
 
 func (v Variables) BooleanSlice() ([]bool, error) {
 	return varsToSliceOf(v, (*Variable).Boolean)
+}
+
+func (v Variables) Float32Slice() ([]float32, error) {
+	return varsToSliceOf(v, (*Variable).Float32)
+}
+
+func (v Variables) Float64Slice() ([]float64, error) {
+	return varsToSliceOf(v, (*Variable).Float64)
+}
+
+func (v Variables) UintSlice() ([]uint, error) {
+	return varsToSliceOf(v, (*Variable).Uint)
+}
+
+func (v Variables) Uint8Slice() ([]uint8, error) {
+	return varsToSliceOf(v, (*Variable).Uint8)
+}
+
+func (v Variables) Uint16Slice() ([]uint16, error) {
+	return varsToSliceOf(v, (*Variable).Uint16)
+}
+
+func (v Variables) Uint32Slice() ([]uint32, error) {
+	return varsToSliceOf(v, (*Variable).Uint32)
+}
+
+func (v Variables) Uint64Slice() ([]uint64, error) {
+	return varsToSliceOf(v, (*Variable).Uint64)
+}
+
+func (v Variables) TimeSlice(layout string) ([]time.Time, error) {
+	converter := func(variable *Variable) (time.Time, error) {
+		return variable.Time(layout)
+	}
+	return varsToSliceOf(v, converter)
 }
 
 func (v Variables) appendRunners(runners ...Runner) {
