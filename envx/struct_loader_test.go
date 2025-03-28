@@ -121,6 +121,71 @@ func TestStructLoader_RequiredFields(t *testing.T) {
 	err := envx.Load(&cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not set")
+	assert.Contains(t, err.Error(), "REQUIRED")
+}
+
+func TestStructLoader_RequiredFieldsWithPrefix(t *testing.T) {
+	type Config struct {
+		Required string `env:"MUST_EXIST;required"`
+	}
+
+	var cfg Config
+
+	// Use a prefix
+	err := envx.Load(&cfg, envx.WithPrefix("MYAPP_"))
+	require.Error(t, err)
+
+	// Verify error contains prefixed variable name, not the base name
+	assert.Contains(t, err.Error(), `"MYAPP_MUST_EXIST" is not set`)
+	assert.Contains(t, err.Error(), "value is required")
+
+	// Now try with both prefix and fallback prefix
+	err = envx.Load(&cfg,
+		envx.WithPrefix("APP_"),
+		envx.WithFallbackPrefix("FB_"),
+		envx.WithPrefixFallback(true),
+	)
+	require.Error(t, err)
+
+	// Should report the primary prefixed name (APP_) in the error message
+	assert.Contains(t, err.Error(), `"APP_MUST_EXIST" is not set`)
+	assert.Contains(t, err.Error(), "value is required")
+}
+
+func TestStructLoader_RequiredFieldsWithFieldName(t *testing.T) {
+	// When using field name only (no explicit env name)
+	type Config struct {
+		Key string `env:";required"` // Should use "KEY" as the env var name
+	}
+
+	var cfg Config
+
+	// Unset all possible variables to ensure none are found
+	os.Unsetenv("APP_KEY")
+	os.Unsetenv("FB_KEY")
+	os.Unsetenv("KEY")
+
+	// Try with both prefix and fallback prefix
+	opts := []envx.Option{
+		envx.WithPrefix("APP_"),
+		envx.WithFallbackPrefix("FB_"),
+		envx.WithPrefixFallback(true),
+	}
+
+	err := envx.Load(&cfg, opts...)
+	require.Error(t, err)
+
+	// Should report the primary prefixed name (APP_KEY) in the error message
+	assert.Contains(t, err.Error(), `"APP_KEY" is not set`)
+	assert.Contains(t, err.Error(), "value is required")
+
+	// Verify the fallback works when FB_KEY is available
+	os.Setenv("FB_KEY", "fallback_value")
+	defer os.Unsetenv("FB_KEY")
+
+	err = envx.Load(&cfg, opts...)
+	require.NoError(t, err)
+	assert.Equal(t, "fallback_value", cfg.Key)
 }
 
 func TestStructLoader_NotEmpty(t *testing.T) {

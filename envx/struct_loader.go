@@ -311,6 +311,13 @@ type DirectiveHandler func(ctx *FieldContext, dir Directive) error
 func (l *StructLoader) applyDirectives(ctx *FieldContext) error {
 	ctx.Variable = Coalesce(ctx.FinalNames...)
 
+	// Ensure that the variable has the correct order of tried names
+	// The FinalNames already has the correct order of priority
+	if len(ctx.FinalNames) > 0 {
+		ctx.Variable.AllNames = make([]string, len(ctx.FinalNames))
+		copy(ctx.Variable.AllNames, ctx.FinalNames)
+	}
+
 	for _, dir := range ctx.Directives {
 		if dir.Name == "delimiter" || dir.Name == "layout" || dir.Name == "validateMethod" || dir.Name == "convertMethod" {
 			continue

@@ -13,9 +13,10 @@ import (
 )
 
 type Variable struct {
-	Name  string
-	Val   string
-	Exist bool
+	Name     string
+	Val      string
+	Exist    bool
+	AllNames []string // List of all variable names that were tried during lookup
 
 	runners []Runner
 }
@@ -23,35 +24,72 @@ type Variable struct {
 func Get(name string) *Variable {
 	val, exist := os.LookupEnv(name)
 	return &Variable{
-		Name:  name,
-		Val:   val,
-		Exist: exist,
+		Name:     name,
+		Val:      val,
+		Exist:    exist,
+		AllNames: []string{name},
 	}
 }
 
 func Coalesce(name ...string) *Variable {
-	var v *Variable
+	if len(name) == 0 {
+		return &Variable{}
+	}
+
+	// Store all names to try in the correct order
+	allNames := make([]string, len(name))
+	copy(allNames, name)
+
+	// Try all names in order
 	for _, n := range name {
-		if v = Get(n); v.Val != "" {
+		if v := Get(n); v.Val != "" {
+			// Found a value - set AllNames to preserve priority order
+			v.AllNames = allNames
+			// Also set the primary name (for error messages) to the first name in the list
+			v.Name = name[0]
 			return v
 		}
 	}
+
+	// No value found - return variable with first name but keep record of all tried names
+	v := Get(name[0])
+	v.AllNames = allNames
 	return v
 }
 
 type Prefixed string
 
 func (p Prefixed) Get(name string) *Variable {
-	return Get(string(p) + name)
+	v := Get(string(p) + name)
+	// Adjust the AllNames field to include both the prefixed form (which we already got)
+	// and the unprefixed form (which we may want to include for clarity)
+	v.AllNames = []string{string(p) + name, name}
+	return v
 }
 
 func (p Prefixed) Coalesce(name ...string) *Variable {
-	var v *Variable
-	for _, n := range name {
-		if v = p.Get(n); v.Val != "" {
-			return v
+	if len(name) == 0 {
+		return &Variable{}
+	}
+
+	// Initialize with the first name
+	v := p.Get(name[0])
+	allNames := []string{string(p) + name[0], name[0]}
+
+	// Try the other names
+	for _, n := range name[1:] {
+		prefixedName := string(p) + n
+		allNames = append(allNames, prefixedName, n)
+
+		if temp := Get(prefixedName); temp.Val != "" {
+			// Found a value, use it but keep all the names we tried
+			temp.AllNames = allNames
+			return temp
 		}
 	}
+
+	// No value found, use the first name but keep record of all tried names
+	v.AllNames = allNames
 	return v
 }
 
@@ -542,11 +580,15 @@ func (v *Variable) Each(delimiter ...string) Variables {
 	for i, val := range values {
 		runners := make([]Runner, len(v.runners))
 		copy(runners, v.runners)
+		// Copy AllNames slice to preserve all attempted variable names
+		allNames := make([]string, len(v.AllNames))
+		copy(allNames, v.AllNames)
 		vars[i] = &Variable{
-			Name:    v.Name,
-			Val:     val,
-			Exist:   v.Exist,
-			runners: runners,
+			Name:     v.Name,
+			Val:      val,
+			Exist:    v.Exist,
+			AllNames: allNames,
+			runners:  runners,
 		}
 	}
 	return vars
@@ -578,8 +620,14 @@ func MatchRegexp(expr *regexp.Regexp) Runner {
 
 func Required(v *Variable) error {
 	if !v.Exist {
+		// Use the first name (highest priority) for the error message
+		varName := v.Name
+		if len(v.AllNames) > 0 {
+			varName = v.AllNames[0]
+		}
+
 		return Error{
-			VarName: v.Name,
+			VarName: varName,
 			Reason:  "is not set",
 			Cause:   ErrRequired,
 		}
