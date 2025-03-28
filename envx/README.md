@@ -291,6 +291,12 @@ type Config struct {
 }
 ```
 
+Special tag formats:
+
+1. When using quoted variable names, the prefix is not applied: `env:"'EXACT_VAR_NAME'"` - will look for exactly `EXACT_VAR_NAME` without any prefixes.
+2. When using a leading comma, the field name is automatically prepended: `env:",FALLBACK_NAME"` - will first try the field name (converted to UPPER_SNAKE_CASE), then `FALLBACK_NAME`.
+3. When using only directives: `env:";required;default(value)"` - the field name (converted to UPPER_SNAKE_CASE) will be used.
+
 This allows for flexible fallback strategies and migration paths when renaming environment variables.
 
 ### Field Type Support
@@ -423,8 +429,11 @@ err := envx.Load(&cfg,
 Available options:
 
 - `WithPrefix(prefix)`: Add a prefix to all environment variable names
+  - The prefix is only automatically applied to the first name in the list of names
+  - The prefix is not applied to names in single quotes: `env:"'EXACT_NAME'"` 
 - `WithPrefixFallback(enable)`: If enabled, falls back to non-prefixed names when prefixed ones are not set
 - `WithFallbackPrefix(prefix)`: Adds a secondary prefix for fallback when the primary prefix doesn't match
+  - This is applied to all fallback names (names after the first one) when `WithPrefixFallback` is enabled
 - `WithTagParser(parser)`: Use a custom tag parser
 - `WithCustomValidator(name, validator)`: Add a custom validation directive
 - `WithTypeHandler(type, handler)`: Register a handler for a specific type
@@ -491,3 +500,17 @@ type Config struct {
 ```
 
 This allows for a more intuitive mapping between struct field names and environment variable names, even when working with complex naming conventions and acronyms.
+
+### Environment Variable Prefix Rules
+
+When using the struct loader with prefixes, the following rules apply:
+
+1. **Primary name with prefix**: The prefix is only applied to the first name in the comma-separated list in the tag. For example, with `WithPrefix("APP_")` and a tag `env:"VAR1,VAR2"`, the system will look for `APP_VAR1`, not for `APP_VAR2`.
+
+2. **Quoted names**: If a name is enclosed in single quotes, the prefix is never applied to it. This allows for exact environment variable names. For example, with `WithPrefix("APP_")` and a tag `env:"'EXACT_VAR'"`, the system will look for exactly `EXACT_VAR`, not `APP_EXACT_VAR`.
+
+3. **Leading comma**: If a tag starts with a comma, the field name is automatically prepended to the list of names to try. For example, with a field named `Port` and a tag `env:",FALLBACK_PORT"`, the system will first try the environment variable `PORT` (converted from the field name), and then `FALLBACK_PORT`.
+
+4. **No names, only directives**: If a tag contains only directives (e.g., `env:";required;default(8080)"`), the field name is used as the environment variable name. For example, with a field named `Port` and a tag `env:";required"`, the system will look for the environment variable `PORT`.
+
+5. **Fallback prefix**: When `WithPrefixFallback(true)` and `WithFallbackPrefix("FALLBACK_")` are used, the fallback prefix is applied to secondary names (after the first name) when they are not quoted. For example, with `WithPrefix("APP_")`, `WithPrefixFallback(true)`, `WithFallbackPrefix("DEFAULT_")` and a tag `env:"VAR1,VAR2"`, the system will look for `APP_VAR1`, then `DEFAULT_VAR2`, and then `VAR2`.

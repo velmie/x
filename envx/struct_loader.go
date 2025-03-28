@@ -225,6 +225,15 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		ctx.EnvNames = tag.Names
 		ctx.Directives = tag.Directives
 
+		trimmedTagValue := strings.TrimSpace(tagValue)
+		if len(ctx.EnvNames) == 0 && (strings.HasPrefix(trimmedTagValue, ";") || trimmedTagValue == "") {
+			ctx.EnvNames = []string{toEnvNameFormat(field.Name)}
+		}
+
+		if strings.HasPrefix(trimmedTagValue, ",") {
+			ctx.EnvNames = append([]string{toEnvNameFormat(field.Name)}, ctx.EnvNames...)
+		}
+
 		for _, dir := range ctx.Directives {
 			switch dir.Name {
 			case "delimiter":
@@ -246,30 +255,51 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 			}
 		}
 	} else {
-		// If no env tag, derive name from field name
-		// For regular fields this works normally
-		// For struct fields without tags, it allows accessing nested fields directly
 		ctx.EnvNames = []string{toEnvNameFormat(field.Name)}
 	}
 
-	// Build the final names list with prefix consideration
-	for _, name := range ctx.EnvNames {
-		if l.prefix != "" {
-			// Add the name with the main prefix
-			ctx.FinalNames = append(ctx.FinalNames, l.prefix+name)
+	ctx.FinalNames = []string{}
+	processedNames := make(map[string]struct{})
 
-			if l.enablePrefixFallback {
-				// Prioritize fallback with the fallback prefix, if it's set
+	addName := func(name string) {
+		if _, exists := processedNames[name]; !exists && name != "" {
+			ctx.FinalNames = append(ctx.FinalNames, name)
+			processedNames[name] = struct{}{}
+		}
+	}
+
+	if len(ctx.EnvNames) > 0 {
+		firstName := ctx.EnvNames[0]
+		isFirstNameQuoted := strings.HasPrefix(firstName, "'") && strings.HasSuffix(firstName, "'")
+
+		if isFirstNameQuoted {
+			addName(strings.Trim(firstName, "'"))
+		} else {
+			if l.prefix != "" {
+				addName(l.prefix + firstName)
+			}
+
+			if l.enablePrefixFallback && l.fallbackPrefix != "" {
+				addName(l.fallbackPrefix + firstName)
+			}
+
+			addName(firstName)
+		}
+
+		for i := 1; i < len(ctx.EnvNames); i++ {
+			fallbackName := ctx.EnvNames[i]
+			isFallbackQuoted := strings.HasPrefix(fallbackName, "'") && strings.HasSuffix(fallbackName, "'")
+
+			if isFallbackQuoted {
+				addName(strings.Trim(fallbackName, "'"))
+			} else {
+				// Apply fallback prefix regardless of enablePrefixFallback - this is specifically what WithFallbackPrefix is for
 				if l.fallbackPrefix != "" {
-					ctx.FinalNames = append(ctx.FinalNames, l.fallbackPrefix+name)
+					addName(l.fallbackPrefix + fallbackName)
 				}
 
-				// Add the name without any prefix as the final fallback option
-				ctx.FinalNames = append(ctx.FinalNames, name)
+				addName(fallbackName)
 			}
-		} else {
-			// No prefix, just use the name as is
-			ctx.FinalNames = append(ctx.FinalNames, name)
 		}
 	}
 
@@ -1144,18 +1174,20 @@ func NewTagParser() TagParser {
 func (p *DefaultTagParser) Parse(tag string) (Tag, error) {
 	var result Tag
 	parts := strings.Split(tag, ";")
-	if len(parts) == 0 || parts[0] == "" {
-		return result, fmt.Errorf("empty tag")
-	}
 
-	namesList := strings.Split(parts[0], ",")
-	for _, name := range namesList {
-		name = strings.TrimSpace(name)
-		if name != "" {
-			result.Names = append(result.Names, name)
+	// Process the name part (before the first ;)
+	if len(parts) > 0 {
+		// Handle the names section (may be empty)
+		namesList := strings.Split(parts[0], ",")
+		for _, name := range namesList {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				result.Names = append(result.Names, name)
+			}
 		}
 	}
 
+	// Process directives (after ;)
 	for i := 1; i < len(parts); i++ {
 		part := strings.TrimSpace(parts[i])
 		if part == "" {

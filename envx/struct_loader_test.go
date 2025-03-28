@@ -897,6 +897,44 @@ func (p *CustomTagParser) Parse(tag string) (envx.Tag, error) {
 	return result, nil
 }
 
+func TestStructLoader_TagParserHandling(t *testing.T) {
+	t.Run("Normal tag format", func(t *testing.T) {
+		parser := envx.NewTagParser()
+		tag, err := parser.Parse("NAME1,NAME2;dir")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"NAME1", "NAME2"}, tag.Names)
+		assert.Equal(t, 1, len(tag.Directives))
+		assert.Equal(t, "dir", tag.Directives[0].Name)
+	})
+
+	t.Run("Leading comma tag format", func(t *testing.T) {
+		parser := envx.NewTagParser()
+		tag, err := parser.Parse(",NAME2;dir")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"NAME2"}, tag.Names)
+		assert.Equal(t, 1, len(tag.Directives))
+		assert.Equal(t, "dir", tag.Directives[0].Name)
+	})
+
+	t.Run("Empty name part", func(t *testing.T) {
+		parser := envx.NewTagParser()
+		tag, err := parser.Parse(";dir")
+		require.NoError(t, err)
+		assert.Empty(t, tag.Names)
+		assert.Equal(t, 1, len(tag.Directives))
+		assert.Equal(t, "dir", tag.Directives[0].Name)
+	})
+
+	t.Run("Quoted name part", func(t *testing.T) {
+		parser := envx.NewTagParser()
+		tag, err := parser.Parse("'NAME1',NAME2;dir")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"'NAME1'", "NAME2"}, tag.Names)
+		assert.Equal(t, 1, len(tag.Directives))
+		assert.Equal(t, "dir", tag.Directives[0].Name)
+	})
+}
+
 func TestStructLoader_CustomTagParser(t *testing.T) {
 	os.Setenv("CUSTOM_VAR", "custom_value")
 	defer os.Unsetenv("CUSTOM_VAR")
@@ -953,6 +991,183 @@ func TestStructLoader_CustomDirectiveHandler(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid email format")
 	})
+}
+
+func TestStructLoader_FallbackPrefixLogic(t *testing.T) {
+	type Config struct {
+		Var string `env:"PRIMARY_VAR,FALLBACK_VAR"`
+	}
+
+	// Case 1: Prefix only
+	os.Setenv("P_PRIMARY_VAR", "p_primary")
+	var cfg1 Config
+	err1 := envx.Load(&cfg1, envx.WithPrefix("P_"))
+	require.NoError(t, err1)
+	assert.Equal(t, "p_primary", cfg1.Var)
+	os.Unsetenv("P_PRIMARY_VAR")
+
+	// Case 2: Prefix + Fallback Var exists unprefixed
+	os.Setenv("FALLBACK_VAR", "fallback")
+	var cfg2 Config
+	err2 := envx.Load(&cfg2, envx.WithPrefix("P_"))
+	require.NoError(t, err2)
+	assert.Equal(t, "fallback", cfg2.Var)
+	os.Unsetenv("FALLBACK_VAR")
+
+	// Case 3: Prefix + PrefixFallback + FallbackPrefix
+	os.Setenv("P_PRIMARY_VAR", "p_primary")
+	os.Setenv("F_PRIMARY_VAR", "f_primary")
+	os.Setenv("PRIMARY_VAR", "primary")
+	os.Setenv("F_FALLBACK_VAR", "f_fallback")
+	os.Setenv("FALLBACK_VAR", "fallback")
+	defer func() {
+		os.Unsetenv("P_PRIMARY_VAR")
+		os.Unsetenv("F_PRIMARY_VAR")
+		os.Unsetenv("PRIMARY_VAR")
+		os.Unsetenv("F_FALLBACK_VAR")
+		os.Unsetenv("FALLBACK_VAR")
+	}()
+
+	var cfg3 Config
+	err3 := envx.Load(&cfg3, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err3)
+	assert.Equal(t, "p_primary", cfg3.Var)
+
+	os.Unsetenv("P_PRIMARY_VAR")
+	err3 = envx.Load(&cfg3, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err3)
+	assert.Equal(t, "f_primary", cfg3.Var)
+
+	os.Unsetenv("F_PRIMARY_VAR")
+	err3 = envx.Load(&cfg3, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err3)
+	assert.Equal(t, "primary", cfg3.Var)
+
+	os.Unsetenv("PRIMARY_VAR")
+	err3 = envx.Load(&cfg3, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err3)
+	assert.Equal(t, "f_fallback", cfg3.Var)
+
+	os.Unsetenv("F_FALLBACK_VAR")
+	err3 = envx.Load(&cfg3, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err3)
+	assert.Equal(t, "fallback", cfg3.Var)
+}
+
+func TestStructLoader_QuotedNames(t *testing.T) {
+	type Config struct {
+		Var1 string `env:"'EXACT_VAR_1',REGULAR_VAR"`
+		Var2 string `env:"REGULAR_VAR,'EXACT_VAR_2'"`
+		Var3 string `env:"'EXACT_VAR_3'"`
+	}
+
+	os.Setenv("EXACT_VAR_1", "exact1")
+	os.Setenv("P_REGULAR_VAR", "p_regular")
+	os.Setenv("REGULAR_VAR", "regular")
+	os.Setenv("EXACT_VAR_2", "exact2")
+	os.Setenv("EXACT_VAR_3", "exact3")
+	os.Setenv("P_EXACT_VAR_1", "ignored")
+	os.Setenv("F_EXACT_VAR_2", "ignored")
+	defer func() {
+		os.Unsetenv("EXACT_VAR_1")
+		os.Unsetenv("P_REGULAR_VAR")
+		os.Unsetenv("REGULAR_VAR")
+		os.Unsetenv("EXACT_VAR_2")
+		os.Unsetenv("EXACT_VAR_3")
+		os.Unsetenv("P_EXACT_VAR_1")
+		os.Unsetenv("F_EXACT_VAR_2")
+	}()
+
+	var cfg Config
+	err := envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+
+	assert.Equal(t, "exact1", cfg.Var1)
+	assert.Equal(t, "p_regular", cfg.Var2)
+	assert.Equal(t, "exact3", cfg.Var3)
+}
+
+func TestStructLoader_LeadingComma(t *testing.T) {
+	type Config struct {
+		MyKey string `env:",OTHER_KEY"` // Field name is MY_KEY
+	}
+
+	os.Setenv("P_MY_KEY", "p_my_key")
+	os.Setenv("F_MY_KEY", "f_my_key")
+	os.Setenv("MY_KEY", "my_key")
+	os.Setenv("F_OTHER_KEY", "f_other_key")
+	os.Setenv("OTHER_KEY", "other_key")
+	defer func() {
+		os.Unsetenv("P_MY_KEY")
+		os.Unsetenv("F_MY_KEY")
+		os.Unsetenv("MY_KEY")
+		os.Unsetenv("F_OTHER_KEY")
+		os.Unsetenv("OTHER_KEY")
+	}()
+
+	var cfg Config
+	err := envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "p_my_key", cfg.MyKey)
+
+	os.Unsetenv("P_MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "f_my_key", cfg.MyKey)
+
+	os.Unsetenv("F_MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "my_key", cfg.MyKey)
+
+	os.Unsetenv("MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "f_other_key", cfg.MyKey)
+
+	os.Unsetenv("F_OTHER_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "other_key", cfg.MyKey)
+}
+
+func TestStructLoader_EmptyNamePart(t *testing.T) {
+	type Config struct {
+		MyKey      string `env:";required"`
+		AnotherKey string `env:" ;default(abc)"`
+	}
+
+	os.Setenv("P_MY_KEY", "p_my_key")
+	os.Setenv("F_MY_KEY", "f_my_key")
+	os.Setenv("MY_KEY", "my_key")
+	defer func() {
+		os.Unsetenv("P_MY_KEY")
+		os.Unsetenv("F_MY_KEY")
+		os.Unsetenv("MY_KEY")
+	}()
+
+	var cfg Config
+	err := envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+
+	assert.Equal(t, "p_my_key", cfg.MyKey)
+	assert.Equal(t, "abc", cfg.AnotherKey)
+
+	os.Unsetenv("P_MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "f_my_key", cfg.MyKey)
+
+	os.Unsetenv("F_MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.NoError(t, err)
+	assert.Equal(t, "my_key", cfg.MyKey)
+
+	os.Unsetenv("MY_KEY")
+	err = envx.Load(&cfg, envx.WithPrefix("P_"), envx.WithPrefixFallback(true), envx.WithFallbackPrefix("F_"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MY_KEY")
+	assert.Contains(t, err.Error(), "is not set")
 }
 
 func TestStructLoader_AutoSnakeCase(t *testing.T) {
