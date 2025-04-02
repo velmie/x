@@ -1,19 +1,58 @@
 # Envx
 
 The envx package provides fluent API for retrieving and validating environment variables. It
-allows for easy fetching, default setting, type conversion, and conditions checking of environment variables.
+allows for easy fetching, default setting, type conversion, and conditions checking of configuration values from multiple sources.
 
 ## Features
 
-* Retrieve environment variables with fallbacks.
-* Set default values.
-* Enforce required variables.
-* Validate variables against a set of conditions including range validations.
-* Convert environment variable values to common types (string, boolean, duration, int, uint, float types, time.Time, etc.)
-* Load environment variables directly into struct fields using reflection and struct tags
+* Retrieve configuration values with fallbacks from multiple sources
+* Configurable sources - environment variables, .env files, in-memory maps, etc.
+* Set default values
+* Enforce required variables
+* Validate variables against a set of conditions including range validations
+* Convert configuration values to common types (string, boolean, duration, int, uint, float types, time.Time, etc.)
+* Load configuration values directly into struct fields using reflection and struct tags
 * Support for nested structures with proper prefix handling
 
-## Usage
+## Data Sources
+
+Envx now supports retrieving configuration values from multiple sources. By default, it uses environment variables, but you can add additional sources:
+
+```go
+import "github.com/velmie/x/envx"
+
+// Use environment variables (default)
+value, err := envx.Get("MY_ENV_VAR").String()
+
+// Add a custom source (in-memory map)
+customSource := &envx.MapSource{
+    Values: map[string]string{
+        "CUSTOM_KEY": "custom_value",
+    },
+}
+envx.DefaultResolver.AddSource(customSource)
+
+// Now values will be first checked in customSource, then in environment variables
+value, err := envx.Get("CUSTOM_KEY").String() // Returns "custom_value"
+
+// Load from .env file
+envFileSource, err := envx.NewEnvFileSource(".env")
+if err != nil {
+    // handle error
+}
+envx.DefaultResolver.AddSource(envFileSource)
+
+// Create a custom resolver with specific sources
+resolver := envx.NewResolver(
+    envx.EnvSource{},                      // First check environment variables
+    &envx.MapSource{Values: customValues}, // Then check in-memory map
+)
+
+// Use custom resolver
+value, err := resolver.Get("CONFIG_KEY").String()
+```
+
+## Basic Usage
 
 Basic Retrieval
 
@@ -238,7 +277,7 @@ timeSlice, err := envx.Get("MY_TIME_LIST").TimeSlice("2006-01-02")
 
 ## Struct Loader
 
-The envx package provides functionality to load environment variables directly into struct fields using reflection and struct tags. This approach simplifies the process of loading configuration from environment variables.
+The envx package provides functionality to load configuration values directly into struct fields using reflection and struct tags. This approach simplifies the process of loading configuration from environment variables.
 
 ### Basic Usage
 
@@ -438,6 +477,7 @@ Available options:
 - `WithCustomValidator(name, validator)`: Add a custom validation directive
 - `WithTypeHandler(type, handler)`: Register a handler for a specific type
 - `WithKindHandler(kind, handler)`: Register a handler for a specific reflection kind
+- `WithResolver(resolver)`: Use a custom resolver for retrieving values instead of the default one
 
 ### Custom Validation
 

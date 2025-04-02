@@ -21,46 +21,10 @@ type Variable struct {
 	runners []Runner
 }
 
-func Get(name string) *Variable {
-	val, exist := os.LookupEnv(name)
-	return &Variable{
-		Name:     name,
-		Val:      val,
-		Exist:    exist,
-		AllNames: []string{name},
-	}
-}
-
-func Coalesce(name ...string) *Variable {
-	if len(name) == 0 {
-		return &Variable{}
-	}
-
-	// Store all names to try in the correct order
-	allNames := make([]string, len(name))
-	copy(allNames, name)
-
-	// Try all names in order
-	for _, n := range name {
-		if v := Get(n); v.Val != "" {
-			// Found a value - set AllNames to preserve priority order
-			v.AllNames = allNames
-			// Also set the primary name (for error messages) to the first name in the list
-			v.Name = name[0]
-			return v
-		}
-	}
-
-	// No value found - return variable with first name but keep record of all tried names
-	v := Get(name[0])
-	v.AllNames = allNames
-	return v
-}
-
 type Prefixed string
 
 func (p Prefixed) Get(name string) *Variable {
-	v := Get(string(p) + name)
+	v, _ := DefaultResolver.Get(string(p) + name)
 	// Adjust the AllNames field to include both the prefixed form (which we already got)
 	// and the unprefixed form (which we may want to include for clarity)
 	v.AllNames = []string{string(p) + name, name}
@@ -72,24 +36,25 @@ func (p Prefixed) Coalesce(name ...string) *Variable {
 		return &Variable{}
 	}
 
-	// Initialize with the first name
-	v := p.Get(name[0])
-	allNames := []string{string(p) + name[0], name[0]}
+	// Create a list of prefixed names to try
+	prefixedNames := make([]string, len(name))
+	allNames := make([]string, 0, len(name)*2)
 
-	// Try the other names
-	for _, n := range name[1:] {
+	for i, n := range name {
 		prefixedName := string(p) + n
+		prefixedNames[i] = prefixedName
 		allNames = append(allNames, prefixedName, n)
-
-		if temp := Get(prefixedName); temp.Val != "" {
-			// Found a value, use it but keep all the names we tried
-			temp.AllNames = allNames
-			return temp
-		}
 	}
 
-	// No value found, use the first name but keep record of all tried names
+	// Try the prefixed names using DefaultResolver
+	v, _ := DefaultResolver.Coalesce(prefixedNames...)
+
+	// Preserve all the names we conceptually tried (both prefixed and unprefixed)
 	v.AllNames = allNames
+
+	// Set primary name (for error messages) to the first name in the list
+	v.Name = name[0]
+
 	return v
 }
 

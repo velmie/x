@@ -71,6 +71,15 @@ type StructLoader struct {
 	typeHandlers         map[reflect.Type]TypeHandler
 	kindHandlers         map[reflect.Kind]KindHandler
 	directiveHandlers    map[string]DirectiveHandler
+	resolver             Resolver
+}
+
+// WithResolver sets a custom resolver for variable lookups
+// If not specified, DefaultResolver will be used
+func WithResolver(resolver Resolver) Option {
+	return func(l *StructLoader) {
+		l.resolver = resolver
+	}
 }
 
 func NewStructLoader(opts ...Option) *StructLoader {
@@ -82,6 +91,7 @@ func NewStructLoader(opts ...Option) *StructLoader {
 		typeHandlers:         make(map[reflect.Type]TypeHandler),
 		kindHandlers:         make(map[reflect.Kind]KindHandler),
 		directiveHandlers:    make(map[string]DirectiveHandler),
+		resolver:             DefaultResolver,
 	}
 
 	loader.typeHandlers[reflect.TypeOf(time.Time{})] = &TimeHandler{}
@@ -309,7 +319,11 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 type DirectiveHandler func(ctx *FieldContext, dir Directive) error
 
 func (l *StructLoader) applyDirectives(ctx *FieldContext) error {
-	ctx.Variable = Coalesce(ctx.FinalNames...)
+	var err error
+	ctx.Variable, err = l.resolver.Coalesce(ctx.FinalNames...)
+	if err != nil {
+		return fmt.Errorf("error resolving variables: %w", err)
+	}
 
 	// Ensure that the variable has the correct order of tried names
 	// The FinalNames already has the correct order of priority
