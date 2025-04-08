@@ -7,6 +7,8 @@ allows for easy fetching, default setting, type conversion, and conditions check
 
 * Retrieve configuration values with fallbacks from multiple sources
 * Configurable sources - environment variables, .env files, in-memory maps, etc.
+* **Source Labeling:** Assign labels to sources for targeted lookups.
+* **Explicit-Only Sources:** Mark sources to be used only when explicitly requested.
 * Set default values
 * Enforce required variables
 * Validate variables against a set of conditions including range validations
@@ -16,40 +18,68 @@ allows for easy fetching, default setting, type conversion, and conditions check
 
 ## Data Sources
 
-Envx now supports retrieving configuration values from multiple sources. By default, it uses environment variables, but you can add additional sources:
+Envx now supports retrieving configuration values from multiple sources. By default, it uses environment variables (`envx.EnvSource{}` with labels `env` and `default`), but you can add and configure additional sources using a `Resolver`.
+
+**Source Configuration:**
+
+When adding sources to a resolver, you can provide options:
+
+*   `envx.WithLabels(labels ...string)`: Assigns one or more string labels to a source. These labels can be used in struct tags to target specific sources.
+*   `envx.IsExplicitOnly()`: Marks a source so that it's *only* queried when explicitly referenced by one of its labels in a struct tag (e.g., `env:"VAR[label]"`). Such sources are ignored by default lookups (like `envx.Get`, `envx.Coalesce`, or struct fields without specific labels).
 
 ```go
 import "github.com/velmie/x/envx"
 
-// Use environment variables (default)
-value, err := envx.Get("MY_ENV_VAR").String()
+// --- Resolver Setup ---
 
-// Add a custom source (in-memory map)
-customSource := &envx.MapSource{
-    Values: map[string]string{
-        "CUSTOM_KEY": "custom_value",
-    },
-}
-envx.DefaultResolver.AddSource(customSource)
+// Create a custom resolver
+resolver := envx.NewResolver() 
 
-// Now values will be first checked in customSource, then in environment variables
-value, err := envx.Get("CUSTOM_KEY").String() // Returns "custom_value"
+// Add sources with labels and options
+resolver.AddSource(envx.EnvSource{}, envx.WithLabels("env", "local")) // Regular source, searchable by default and via labels 'env' or 'local'
 
 // Load from .env file
 envFileSource, err := envx.NewEnvFileSource(".env")
+if err == nil {
+    resolver.AddSource(envFileSource, envx.WithLabels("file", "local")) // Also searchable by default and via labels 'file' or 'local'
+}
+
+// Example: Add a source (e.g., Vault) that should only be used when explicitly requested
+vaultSource := NewVaultSource(...) // Assume this is your custom Vault source implementation
+resolver.AddSource(vaultSource, envx.WithLabels("vault", "secure"), envx.IsExplicitOnly()) 
+
+// Example: Add another explicit-only source
+externalSource := NewExternalSource(...)
+resolver.AddSource(externalSource, envx.WithLabels("api"), envx.IsExplicitOnly())
+
+// --- Using the Resolver ---
+
+// 1. Direct Lookup (using the resolver directly)
+//    Searches only non-explicit sources ('env', 'file' in this example)
+value, err := resolver.Get("SOME_VAR").String() 
+
+// 2. Loading into a Struct (using the resolver)
+type MyConfig struct {
+    // See Struct Loader section for tag syntax
+    DatabaseURL string `env:"DB_URL[file]"` // Only look for DB_URL in sources labeled 'file'
+    APIKey      string `env:"API_KEY[vault],LEGACY_KEY"` // Try API_KEY only in 'vault', then try LEGACY_KEY in 'env' and 'file'
+    DefaultVar  string `env:"DEFAULT_VAR"` // Search in 'env' and 'file' (non-explicit sources)
+}
+
+var cfg MyConfig
+// Pass the custom resolver to Load
+err = envx.Load(&cfg, envx.WithResolver(resolver)) 
 if err != nil {
     // handle error
 }
-envx.DefaultResolver.AddSource(envFileSource)
 
-// Create a custom resolver with specific sources
-resolver := envx.NewResolver(
-    envx.EnvSource{},                      // First check environment variables
-    &envx.MapSource{Values: customValues}, // Then check in-memory map
-)
+// --- Using the Default Resolver ---
+// The DefaultResolver is pre-configured with EnvSource (labeled 'env', 'default')
+// You can add more sources to it:
+envx.DefaultResolver.AddSource(envFileSource, envx.WithLabels("file")) 
 
-// Use custom resolver
-value, err := resolver.Get("CONFIG_KEY").String()
+// Get uses the DefaultResolver's non-explicit sources
+valueFromEnvOrFile := envx.Get("SOME_VAR") 
 ```
 
 ## Basic Usage
@@ -60,60 +90,63 @@ Basic Retrieval
 import "github.com/velmie/x/envx"
 
 func main() {
-chain := envx.Get("MY_ENV_VAR").Default("defaultValue")
-value, err := chain.String()
-if err != nil {
-// handle error
-}
-fmt.Println(value)
+    // Uses envx.DefaultResolver (initially contains only EnvSource)
+    chain := envx.Get("MY_ENV_VAR").Default("defaultValue") 
+    value, err := chain.String()
+    if err != nil {
+        // handle error
+    }
+    fmt.Println(value)
 }
 ```
+*Note: By default, `Get` and `Coalesce` (and the `DefaultResolver`) only search sources that are **not** marked as `ExplicitOnly`.*
 
 Using Coalesce to Get the First Non-Empty Variable
 
 ```go
+// Searches for VAR_1, VAR_2, VAR_3 in non-explicit sources of DefaultResolver
 val, _ := envx.Coalesce("VAR_1", "VAR_2", "VAR_3").Default("defaultValue").String()
 ```
 
 Validations
 
 ```go
-// Ensure the variable is set
-chain := envx.Get("MY_VAR").Required()
+// Ensure the variable is set (checks non-explicit sources)
+chain := envx.Get("MY_VAR").Required() 
 
 // Ensure the variable matches a regular expression
-chain := envx.Get("MY_VAR").MatchRegexp(regexp.MustCompile("^value-\\d+$"))
+chain = envx.Get("MY_VAR").MatchRegexp(regexp.MustCompile("^value-\\d+$"))
 
 // Ensure the variable is one of a set of values
-chain := envx.Get("MY_VAR").OneOf("value1", "value2", "value3")
+chain = envx.Get("MY_VAR").OneOf("value1", "value2", "value3")
 
 // String length validations
-chain := envx.Get("MY_VAR").MinLength(3)
-chain := envx.Get("MY_VAR").MaxLength(10)
-chain := envx.Get("MY_VAR").ExactLength(8)
+chain = envx.Get("MY_VAR").MinLength(3)
+chain = envx.Get("MY_VAR").MaxLength(10)
+chain = envx.Get("MY_VAR").ExactLength(8)
 
 // Universal validation for any type
-chain := envx.Get("ANY_TYPE_VAR").Min(5)  // Works for strings (length) and numbers (value)
-chain := envx.Get("ANY_TYPE_VAR").Max(10) // Works for strings (length) and numbers (value)
-chain := envx.Get("ANY_TYPE_VAR").Range(5, 10) // Works for all numeric types
+chain = envx.Get("ANY_TYPE_VAR").Min(5)  // Works for strings (length) and numbers (value)
+chain = envx.Get("ANY_TYPE_VAR").Max(10) // Works for strings (length) and numbers (value)
+chain = envx.Get("ANY_TYPE_VAR").Range(5, 10) // Works for all numeric types
 
 // Numeric range validations (legacy, but still supported)
-chain := envx.Get("MY_INT_VAR").MinInt(5)
-chain := envx.Get("MY_INT_VAR").MaxInt(100)
-chain := envx.Get("MY_INT_VAR").IntRange(5, 100)
+chain = envx.Get("MY_INT_VAR").MinInt(5)
+chain = envx.Get("MY_INT_VAR").MaxInt(100)
+chain = envx.Get("MY_INT_VAR").IntRange(5, 100)
 
 // Unsigned integer range validations
-chain := envx.Get("MY_UINT_VAR").MinUint(5)
-chain := envx.Get("MY_UINT_VAR").MaxUint(100)
-chain := envx.Get("MY_UINT_VAR").UintRange(5, 100)
+chain = envx.Get("MY_UINT_VAR").MinUint(5)
+chain = envx.Get("MY_UINT_VAR").MaxUint(100)
+chain = envx.Get("MY_UINT_VAR").UintRange(5, 100)
 
 // Float range validations
-chain := envx.Get("MY_FLOAT_VAR").MinFloat(1.5)
-chain := envx.Get("MY_FLOAT_VAR").MaxFloat(99.5)
-chain := envx.Get("MY_FLOAT_VAR").FloatRange(1.5, 99.5)
+chain = envx.Get("MY_FLOAT_VAR").MinFloat(1.5)
+chain = envx.Get("MY_FLOAT_VAR").MaxFloat(99.5)
+chain = envx.Get("MY_FLOAT_VAR").FloatRange(1.5, 99.5)
 
 // Chain multiple validations
-chain := envx.Get("MY_VAR").Required().NotEmpty().MatchRegexp(regexp.MustCompile("^value-\\d+$")).MinLength(8)
+chain = envx.Get("MY_VAR").Required().NotEmpty().MatchRegexp(regexp.MustCompile("^value-\\d+$")).MinLength(8)
 
 // .... 
 
@@ -170,30 +203,30 @@ handling of such scenarios.
 
 ```go
 type DatabaseCredentials struct {
-Host     string
-Port     int
-Name     string
-User     string
-Password string
+    Host     string
+    Port     int
+    Name     string
+    User     string
+    Password string
 }
 
 func DatabaseCredentialsFromEnv() (*DatabaseCredentials, error) {
-cfg := new(DatabaseCredentials)
-p := envx.CreatePrototype().WithRunners(envx.Required, envx.NotEmpty)
+    cfg := new(DatabaseCredentials)
+    p := envx.CreatePrototype().WithRunners(envx.Required, envx.NotEmpty)
 
-err := envx.Supply(
-envx.Set(&cfg.Host, p.Get("DB_HOST").ValidURL().String),
-envx.Set(&cfg.Port, p.Get("DB_PORT").ValidPortNumber().Int),
-envx.Set(&cfg.Name, p.Get("DB_NAME").String),
-envx.Set(&cfg.User, p.Get("DB_USER").String),
-envx.Set(&cfg.Password, p.Get("DB_PASS").String),
-)
+    err := envx.Supply(
+        envx.Set(&cfg.Host, p.Get("DB_HOST").ValidURL().String),
+        envx.Set(&cfg.Port, p.Get("DB_PORT").ValidPortNumber().Int),
+        envx.Set(&cfg.Name, p.Get("DB_NAME").String),
+        envx.Set(&cfg.User, p.Get("DB_USER").String),
+        envx.Set(&cfg.Password, p.Get("DB_PASS").String),
+    )
 
-if err != nil {
-return nil, err
-}
+    if err != nil {
+        return nil, err
+    }
 
-return cfg, nil
+    return cfg, nil
 }
 ```
 
@@ -204,22 +237,22 @@ You can build more complex structures using nested structures, like this:
 
 ```go
 type Service struct {
-LogLevel            string
-DatabaseCredentials *DatabaseCredentials
+    LogLevel            string
+    DatabaseCredentials *DatabaseCredentials
 }
 
 func ServiceFromEnv() (*Service, error) {
-cfg := new(Service)
+    cfg := new(Service)
 
-err := envx.Supply(
-envx.Set(&cfg.LogLevel, envx.Prefixed("MY_APP_").Get("LOG_LEVEL").Default("info").OneOf("warn", "error", "info").String),
-envx.Set(&cfg.DatabaseCredentials, DatabaseCredentialsFromEnv),
-)
-if err != nil {
-return nil, err
-}
+    err := envx.Supply(
+        envx.Set(&cfg.LogLevel, envx.Prefixed("MY_APP_").Get("LOG_LEVEL").Default("info").OneOf("warn", "error", "info").String),
+        envx.Set(&cfg.DatabaseCredentials, DatabaseCredentialsFromEnv),
+    )
+    if err != nil {
+        return nil, err
+    }
 
-return cfg, nil
+    return cfg, nil
 }
 ```
 
@@ -294,7 +327,8 @@ type Config struct {
 
 func main() {
     var cfg Config
-    err := envx.Load(&cfg)
+    // Uses envx.DefaultResolver unless overridden with envx.WithResolver(...)
+    err := envx.Load(&cfg) 
     if err != nil {
         // handle error
     }
@@ -306,37 +340,74 @@ func main() {
 
 ### Struct Tag Syntax
 
-The struct tag format is:
+The struct tag format supports specifying environment variable names, source labels, and directives:
 
 ```
-`env:"ENV_VAR_NAME;directive1;directive2(param);directive3(param1,param2)"`
+`env:"VAR_NAME1[labelA,labelB], VAR_NAME2, VAR_NAME3[labelC]; directive1; directive2(param)"`
 ```
 
-- `ENV_VAR_NAME`: The name of the environment variable to load
-- `directive1`, `directive2`, etc.: Directives that specify validation rules or other behaviors
-- Directives can have parameters in parentheses: `directive(param)` or `directive(param1,param2)`
-- Multiple directives are separated by semicolons
-- Multiple environment variable names can be specified with comma separation: `env:"VAR1,VAR2,VAR3"`
+-   **Variable Names and Fallbacks:**
+  -   `VAR_NAME1, VAR_NAME2, ...`: Comma-separated list of environment variable names to try in order. The first non-empty value found is used.
+-   **Source Labels (Optional):**
+  -   `[labelA,labelB]`: Immediately after a variable name, you can specify a list of source labels in square brackets.
+  -   **Behavior:** If labels are specified for a variable name (`VAR_NAME1[labelA,labelB]`), that specific name (`VAR_NAME1`) will **only** be searched for in sources that have **at least one** of the specified labels (`labelA` or `labelB`). This includes sources marked as `ExplicitOnly`.
+  -   If no labels are specified for a variable name (`VAR_NAME2`), that name will be searched for in all sources that are **not** marked as `ExplicitOnly` (the default search behavior).
+-   **Directives:**
+  -   `;directive1;directive2(param)`: Semicolon-separated list of directives for validation, default values, etc. (See "Available Directives" below).
 
-When multiple environment variable names are specified, they are tried in the order listed, and the first one that is set will be used. This is similar to the `Coalesce` function:
+**Lookup Order:**
 
-```go
-type Config struct {
-    // Will try DATABASE_URL, then DB_URL, then DB_CONNECTION_STRING in order
-    DatabaseURL string `env:"DATABASE_URL,DB_URL,DB_CONNECTION_STRING"`
-    
-    // Combines multiple variables with validation
-    APIKey string `env:"API_KEY_PROD,API_KEY;required;minLen(10)"`
-}
-```
+The loader processes the tag from left to right:
+
+1.  It attempts to resolve the first item (`VAR_NAME1[labelA,labelB]`).
+  *   It looks for `VAR_NAME1` only in sources labeled `labelA` or `labelB`.
+2.  If not found, it attempts to resolve the second item (`VAR_NAME2`).
+  *   It looks for `VAR_NAME2` in all *non-explicit-only* sources.
+3.  If not found, it attempts to resolve the third item (`VAR_NAME3[labelC]`).
+  *   It looks for `VAR_NAME3` only in sources labeled `labelC`.
+4.  This continues until a value is found or all names are exhausted.
+5.  Finally, directives (`directive1`, `directive2`) are applied to the found value (or the default value if none was found but a default is specified).
+
+**Backward Compatibility:**
+
+-   The old format `env:"VAR1,VAR2"` is parsed as trying `VAR1` in all non-explicit sources, then trying `VAR2` in all non-explicit sources.
+-   This preserves compatibility, but note that sources marked `ExplicitOnly` will now be ignored by this old syntax.
 
 Special tag formats:
 
-1. When using quoted variable names, the prefix is not applied: `env:"'EXACT_VAR_NAME'"` - will look for exactly `EXACT_VAR_NAME` without any prefixes.
-2. When using a leading comma, the field name is automatically prepended: `env:",FALLBACK_NAME"` - will first try the field name (converted to UPPER_SNAKE_CASE), then `FALLBACK_NAME`.
-3. When using only directives: `env:";required;default(value)"` - the field name (converted to UPPER_SNAKE_CASE) will be used.
+1.  **Quoted Names:** `env:"'EXACT_VAR_NAME'"` - Looks for `EXACT_VAR_NAME` directly, ignoring any `WithPrefix` option. Source labels can still be used: `env:"'EXACT_VAR_NAME'[label]"`.
+2.  **Leading Comma:** `env:",FALLBACK_NAME"` - Automatically prepends the field name (converted to UPPER_SNAKE_CASE) to the list. Searches `FIELD_NAME` first (in non-explicit sources), then `FALLBACK_NAME` (in non-explicit sources). Source labels can be used on any name: `env:",FALLBACK_NAME[label]"`.
+3.  **Only Directives:** `env:";required;default(value)"` - Uses the field name (converted to UPPER_SNAKE_CASE) and searches in non-explicit sources.
 
-This allows for flexible fallback strategies and migration paths when renaming environment variables.
+### Example with Labeled Sources
+
+```go
+// Assume resolver is configured as in the Data Sources example:
+// - envSource: labels=["env", "local"], explicitOnly=false
+// - fileSource: labels=["file", "local"], explicitOnly=false
+// - vaultSource: labels=["vault", "secure"], explicitOnly=true
+// - externalSource: labels=["api"], explicitOnly=true
+
+type Config struct {
+    // 1. Try SECRET_KEY only in 'vault' or 'secure' sources.
+    // 2. If not found, try API_TOKEN only in 'file' source.
+    // 3. If not found, try TOKEN in 'env' and 'file' sources (non-explicit).
+    APIKey string `env:"SECRET_KEY[vault,secure], API_TOKEN[file], TOKEN"`
+
+    // Search DB_HOST in 'env' and 'file' sources (non-explicit).
+    DBHost string `env:"DB_HOST"` 
+
+    // Search REMOTE_CFG only in 'api' source. Apply 'required' directive.
+    RemoteConfig string `env:"REMOTE_CFG[api];required"`
+
+    // Field without tag: Search 'USERNAME' in 'env' and 'file' (non-explicit).
+    Username string 
+}
+
+var cfg Config
+err := envx.Load(&cfg, envx.WithResolver(resolver)) 
+// Handle error...
+```
 
 ### Field Type Support
 
@@ -356,8 +427,8 @@ The envx package now supports nested structures with proper prefix handling:
 type DatabaseConfig struct {
     Host     string `env:"HOST"`
     Port     int    `env:"PORT"`
-    Username string `env:"USERNAME"`
-    Password string `env:"PASSWORD"`
+    Username string `env:"USERNAME"` // Searched in non-explicit sources by default
+    Password string `env:"PASSWORD[vault];required"` // Searched only in 'vault' source
 }
 
 type APIConfig struct {
@@ -367,14 +438,14 @@ type APIConfig struct {
 
 type Config struct {
     // Tagged nested structs - tag is used as prefix
-    Database DatabaseConfig `env:"DB"` // Will look for DB_HOST, DB_PORT, etc.
+    Database DatabaseConfig `env:"DB"` // Will look for DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD[vault] etc.
     API      APIConfig      `env:"API"` // Will look for API_ENDPOINT, API_TIMEOUT
     
-    // Non-tagged nested struct - fields accessed directly
+    // Non-tagged nested struct - fields accessed directly (respecting labels inside)
     Logger struct {
         Level  string `env:"LOGGER_LEVEL"`
-        Output string `env:"LOGGER_OUTPUT"`
-    } // Will look for LOGGER_LEVEL, LOGGER_OUTPUT directly
+        Output string `env:"LOGGER_OUTPUT[file]"` // Only look in 'file' source
+    } 
     
     // Pointer to struct works too
     Metrics *struct {
@@ -383,13 +454,14 @@ type Config struct {
     } `env:"METRICS"` // Will look for METRICS_PATH, METRICS_INTERVAL
 }
 ```
+*Note:* Prefixes from nested structs (`DB_`, `API_`, `METRICS_`) are combined correctly with variable names *before* source label filtering (`[label]`) is applied.
 
 You can also nest structures multiple levels deep:
 
 ```go
 type CredentialsConfig struct {
     Username string `env:"USERNAME"`
-    Password string `env:"PASSWORD"`
+    Password string `env:"PASSWORD[vault]"` // Look only in vault
 }
 
 type AuthProviderConfig struct {
@@ -407,58 +479,62 @@ type Config struct {
 }
 
 // This will look for:
-// - SYSTEM_AUTH_URL
-// - SYSTEM_AUTH_TIMEOUT
-// - SYSTEM_AUTH_CREDENTIALS_USERNAME
-// - SYSTEM_AUTH_CREDENTIALS_PASSWORD
+// - SYSTEM_AUTH_URL (non-explicit sources)
+// - SYSTEM_AUTH_TIMEOUT (non-explicit sources)
+// - SYSTEM_AUTH_CREDENTIALS_USERNAME (non-explicit sources)
+// - SYSTEM_AUTH_CREDENTIALS_PASSWORD[vault] (only in 'vault' source)
 ```
 
 ### Available Directives
 
 #### Basic Directives
 
-- `required`: Field is required and must be set in environment
-- `notEmpty`: Value must not be empty
-- `default(value)`: Default value if environment variable is not set
-- `expand`: Expand environment variable references in the value (e.g., `${VAR_NAME}`)
+- `required`: Field is required and must have a value found (or a default). Applied *after* searching.
+- `notEmpty`: Found value (or default) must not be empty.
+- `default(value)`: Default value if no environment variable is found/set.
+- `expand`: Expand environment variable references in the value (e.g., `${VAR_NAME}`).
 
 #### Validation Directives
 
-- `validURL`: Value must be a valid URL
-- `validIP`: Value must be a valid IP address
-- `validPort`: Value must be a valid port number (0-65535)
-- `validDomain`: Value must be a valid domain name
-- `validListenAddr`: Value must be a valid listen address (format: `host:port`)
+- `validURL`: Value must be a valid URL.
+- `validIP`: Value must be a valid IP address.
+- `validPort`: Value must be a valid port number (0-65535).
+- `validDomain`: Value must be a valid domain name.
+- `validListenAddr`: Value must be a valid listen address (format: `host:port`).
 - `min(n)`: Universal validator that checks:
-  - String length for string types
-  - Minimum value for numeric types
+  - String length for string types.
+  - Minimum value for numeric types.
 - `max(n)`: Universal validator that checks:
-  - String length for string types
-  - Maximum value for numeric types
-- `range(min,max)`: Universal range validator that works with all numeric types
-- `minLen(n)`: Value must have at least n characters
-- `maxLen(n)`: Value must have no more than n characters
-- `exactLen(n)`: Value must have exactly n characters
-- `regexp(pattern)`: Value must match the regular expression pattern
-- `oneOf(value1,value2,...)`: Value must be one of the specified values
+  - String length for string types.
+  - Maximum value for numeric types.
+- `range(min,max)`: Universal range validator that works with all numeric types.
+- `minLen(n)`: Value must have at least n characters.
+- `maxLen(n)`: Value must have no more than n characters.
+- `exactLen(n)`: Value must have exactly n characters.
+- `regexp(pattern)`: Value must match the regular expression pattern.
+- `oneOf(value1,value2,...)`: Value must be one of the specified values.
 
 #### Format Directives
 
-- `delimiter(char)`: Delimiter for slice elements (default is comma)
-- `layout(format)`: Time format layout for parsing time.Time fields
+- `delimiter(char)`: Delimiter for slice elements (default is comma).
+- `layout(format)`: Time format layout for parsing time.Time fields.
 
 #### Custom Method Directives
 
-- `validateMethod(methodName)`: Call a method on the struct to validate the field value
-- `requiredIfMethod(methodName)`: Field is required if the specified method returns true
-- `convertMethod(methodName)`: Call a method on the struct to convert the string value from environment variable to the field type
+- `validateMethod(methodName)`: Call a method on the struct to validate the field value.
+- `requiredIfMethod(methodName)`: Field is required if the specified method returns true.
+- `convertMethod(methodName)`: Call a method on the struct to convert the string value from environment variable to the field type.
 
 ### Configuration Options
 
 The loader can be configured with various options:
 
 ```go
+resolver := envx.NewResolver()
+// ... add sources to resolver ...
+
 err := envx.Load(&cfg, 
+    envx.WithResolver(resolver), // Use the configured resolver
     envx.WithPrefix("APP_"),
     envx.WithPrefixFallback(true),
     envx.WithFallbackPrefix("DEFAULT_"),
@@ -467,17 +543,14 @@ err := envx.Load(&cfg,
 
 Available options:
 
-- `WithPrefix(prefix)`: Add a prefix to all environment variable names
-  - The prefix is only automatically applied to the first name in the list of names
-  - The prefix is not applied to names in single quotes: `env:"'EXACT_NAME'"` 
-- `WithPrefixFallback(enable)`: If enabled, falls back to non-prefixed names when prefixed ones are not set
-- `WithFallbackPrefix(prefix)`: Adds a secondary prefix for fallback when the primary prefix doesn't match
-  - This is applied to all fallback names (names after the first one) when `WithPrefixFallback` is enabled
-- `WithTagParser(parser)`: Use a custom tag parser
-- `WithCustomValidator(name, validator)`: Add a custom validation directive
-- `WithTypeHandler(type, handler)`: Register a handler for a specific type
-- `WithKindHandler(kind, handler)`: Register a handler for a specific reflection kind
-- `WithResolver(resolver)`: Use a custom resolver for retrieving values instead of the default one
+- `WithResolver(resolver)`: Use a specific `Resolver` instance for lookups. If not provided, `envx.DefaultResolver` is used.
+- `WithPrefix(prefix)`: Add a prefix to environment variable names looked up *via the default mechanism* (i.e., when no source labels `[]` are specified for a name, or when using fallback names without labels). Prefixes are *not* applied to names explicitly targeting sources via labels (`VAR[label]`) or names in single quotes (`'EXACT_NAME'`).
+- `WithPrefixFallback(enable)`: If enabled, falls back to non-prefixed names when prefixed ones are not set (only applies to names looked up via the default mechanism).
+- `WithFallbackPrefix(prefix)`: Adds a secondary prefix for fallback when the primary prefix doesn't match (only applies to names looked up via the default mechanism).
+- `WithTagParser(parser)`: Use a custom tag parser.
+- `WithCustomValidator(name, validator)`: Add a custom validation directive.
+- `WithTypeHandler(type, handler)`: Register a handler for a specific type.
+- `WithKindHandler(kind, handler)`: Register a handler for a specific reflection kind.
 
 ### Custom Validation
 
@@ -486,9 +559,10 @@ You can create custom validators for your specific needs:
 ```go
 // Using a custom validator directive
 emailValidator := func(ctx *envx.FieldContext, _ envx.Directive) error {
-    value, err := ctx.Variable.String()
-    if err != nil {
-        return err
+    // ctx.Variable contains the resolved variable (if found)
+    value, err := ctx.Variable.String() 
+    if err != nil || !ctx.Variable.Exist {
+        return nil // Don't validate if not found or error occurred during lookup
     }
     
     if !strings.Contains(value, "@") || !strings.Contains(value, ".") {
@@ -508,6 +582,7 @@ type Config struct {
 }
 
 func (c *Config) ValidatePassword(password string) error {
+    // Note: This method receives the string value *after* it has been successfully retrieved.
     if len(password) < 10 {
         return errors.New("password is too weak")
     }
@@ -523,13 +598,13 @@ func (c *Config) ConvertToMyType(value string) (MyType, error) {
 
 ### Automatic Snake Case
 
-If no `env` tag is specified, the field name is automatically converted to UPPER_SNAKE_CASE. The conversion properly handles acronyms in the field names:
+If no `env` tag is specified for a field, its name is automatically converted to UPPER_SNAKE_CASE to derive the environment variable name. This conversion correctly handles common acronyms:
 
 ```go
 type Config struct {
     // Regular camelCase to UPPER_SNAKE_CASE conversions:
-    DatabaseURL string     // Uses DATABASE_URL environment variable
-    ServerPort int         // Uses SERVER_PORT environment variable
+    DatabaseURL string     // Uses DATABASE_URL environment variable (searched in non-explicit sources)
+    ServerPort int         // Uses SERVER_PORT environment variable (searched in non-explicit sources)
     
     // Properly handling acronyms:
     IDOfIP string          // Uses ID_OF_IP environment variable
@@ -539,18 +614,13 @@ type Config struct {
 }
 ```
 
-This allows for a more intuitive mapping between struct field names and environment variable names, even when working with complex naming conventions and acronyms.
+### Environment Variable Prefix Rules (Interaction with Labels)
 
-### Environment Variable Prefix Rules
+When using `WithPrefix` in conjunction with source labels `[]`:
 
-When using the struct loader with prefixes, the following rules apply:
+1.  **Names with Labels (`VAR[label]`)**: Prefixes (`WithPrefix`, `WithFallbackPrefix`) are **never** applied to variable names that have explicit source labels specified (e.g., `env:"VAR1[label]"`). The lookup uses the exact name (`VAR1`) within the specified sources (`label`).
+2.  **Names without Labels (`VAR2`)**: Prefixes *are* applied as usual to names *without* explicit labels, according to the `WithPrefix`, `WithPrefixFallback`, and `WithFallbackPrefix` options. The search for these (potentially prefixed) names occurs only in *non-explicit-only* sources.
+3.  **Quoted Names (`'EXACT_VAR'`)**: Prefixes are never applied, regardless of labels.
+4.  **Order Matters**: In a tag like `env:"VAR1[label], VAR2"`, `VAR1` is looked up first (without prefix) in sources with `label`. If not found, `VAR2` is looked up (potentially with prefix) in non-explicit sources.
 
-1. **Primary name with prefix**: The prefix is only applied to the first name in the comma-separated list in the tag. For example, with `WithPrefix("APP_")` and a tag `env:"VAR1,VAR2"`, the system will look for `APP_VAR1`, not for `APP_VAR2`.
-
-2. **Quoted names**: If a name is enclosed in single quotes, the prefix is never applied to it. This allows for exact environment variable names. For example, with `WithPrefix("APP_")` and a tag `env:"'EXACT_VAR'"`, the system will look for exactly `EXACT_VAR`, not `APP_EXACT_VAR`.
-
-3. **Leading comma**: If a tag starts with a comma, the field name is automatically prepended to the list of names to try. For example, with a field named `Port` and a tag `env:",FALLBACK_PORT"`, the system will first try the environment variable `PORT` (converted from the field name), and then `FALLBACK_PORT`.
-
-4. **No names, only directives**: If a tag contains only directives (e.g., `env:";required;default(8080)"`), the field name is used as the environment variable name. For example, with a field named `Port` and a tag `env:";required"`, the system will look for the environment variable `PORT`.
-
-5. **Fallback prefix**: When `WithPrefixFallback(true)` and `WithFallbackPrefix("FALLBACK_")` are used, the fallback prefix is applied to secondary names (after the first name) when they are not quoted. For example, with `WithPrefix("APP_")`, `WithPrefixFallback(true)`, `WithFallbackPrefix("DEFAULT_")` and a tag `env:"VAR1,VAR2"`, the system will look for `APP_VAR1`, then `DEFAULT_VAR2`, and then `VAR2`.
+This ensures that label-based lookups are precise and independent of global prefix settings, while names relying on the default search mechanism still benefit from prefixes.

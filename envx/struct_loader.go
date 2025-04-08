@@ -26,8 +26,6 @@ func WithPrefixFallback(enable bool) Option {
 	}
 }
 
-// WithFallbackPrefix sets an additional prefix for fallback lookup
-// This is useful when doing nested lookups with fallback
 func WithFallbackPrefix(prefix string) Option {
 	return func(l *StructLoader) {
 		l.fallbackPrefix = prefix
@@ -74,8 +72,6 @@ type StructLoader struct {
 	resolver             Resolver
 }
 
-// WithResolver sets a custom resolver for variable lookups
-// If not specified, DefaultResolver will be used
 func WithResolver(resolver Resolver) Option {
 	return func(l *StructLoader) {
 		l.resolver = resolver
@@ -130,7 +126,6 @@ func NewStructLoader(opts ...Option) *StructLoader {
 	loader.directiveHandlers["maxLen"] = MaxLenDirectiveHandler
 	loader.directiveHandlers["exactLen"] = ExactLenDirectiveHandler
 
-	// Universal min/max validators
 	loader.directiveHandlers["min"] = MinDirectiveHandler
 	loader.directiveHandlers["max"] = MaxDirectiveHandler
 	loader.directiveHandlers["range"] = RangeDirectiveHandler
@@ -210,6 +205,8 @@ type FieldContext struct {
 	EnablePrefixFallback bool
 	FallbackPrefix       string
 	TagParser            TagParser
+	SearchPlan           SearchPlan
+	Resolver             Resolver
 }
 
 func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fieldVal reflect.Value) (*FieldContext, error) {
@@ -223,6 +220,7 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		EnablePrefixFallback: l.enablePrefixFallback,
 		FallbackPrefix:       l.fallbackPrefix,
 		TagParser:            l.tagParser,
+		Resolver:             l.resolver,
 	}
 
 	tagValue, hasTag := field.Tag.Lookup("env")
@@ -235,13 +233,26 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		ctx.EnvNames = tag.Names
 		ctx.Directives = tag.Directives
 
+		// Parse the search plan from the tag
+		plan, err := parseSearchPlan(tagValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid search plan: %w", err)
+		}
+		ctx.SearchPlan = plan
+
 		trimmedTagValue := strings.TrimSpace(tagValue)
 		if len(ctx.EnvNames) == 0 && (strings.HasPrefix(trimmedTagValue, ";") || trimmedTagValue == "") {
-			ctx.EnvNames = []string{toEnvNameFormat(field.Name)}
+			fieldName := toEnvNameFormat(field.Name)
+			ctx.EnvNames = []string{fieldName}
+			// Don't add steps to the SearchPlan for empty tags to preserve the old behavior
+			// Empty SearchPlan triggers the Coalesce with prefixes path
 		}
 
 		if strings.HasPrefix(trimmedTagValue, ",") {
-			ctx.EnvNames = append([]string{toEnvNameFormat(field.Name)}, ctx.EnvNames...)
+			fieldName := toEnvNameFormat(field.Name)
+			ctx.EnvNames = append([]string{fieldName}, ctx.EnvNames...)
+			// Only add steps if we have brackets (if SearchPlan already has steps)
+			// Otherwise preserve old behavior with prefixes
 		}
 
 		for _, dir := range ctx.Directives {
@@ -265,7 +276,10 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 			}
 		}
 	} else {
-		ctx.EnvNames = []string{toEnvNameFormat(field.Name)}
+		fieldName := toEnvNameFormat(field.Name)
+		ctx.EnvNames = []string{fieldName}
+		// Don't add steps to SearchPlan for fields without env tag
+		// This preserves the old behavior with prefixes
 	}
 
 	ctx.FinalNames = []string{}
@@ -278,22 +292,41 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		}
 	}
 
+	// Check if we need to add steps to the search plan for cases where there are no brackets
+	// Only add to plan if it already has steps, which means some field had brackets
+	addStepIfPlanHasSteps := func(name string, labels []string) {
+		// Only if any field has labels (brackets), append this name to the plan
+		if len(ctx.SearchPlan.Steps) > 0 {
+			ctx.SearchPlan.Steps = append(ctx.SearchPlan.Steps, SearchStep{
+				Name:   name,
+				Labels: labels,
+			})
+		}
+	}
+
 	if len(ctx.EnvNames) > 0 {
 		firstName := ctx.EnvNames[0]
 		isFirstNameQuoted := strings.HasPrefix(firstName, "'") && strings.HasSuffix(firstName, "'")
 
 		if isFirstNameQuoted {
-			addName(strings.Trim(firstName, "'"))
+			name := strings.Trim(firstName, "'")
+			addName(name)
+			addStepIfPlanHasSteps(name, nil)
 		} else {
 			if l.prefix != "" {
-				addName(l.prefix + firstName)
+				prefixedName := l.prefix + firstName
+				addName(prefixedName)
+				addStepIfPlanHasSteps(prefixedName, nil)
 			}
 
 			if l.enablePrefixFallback && l.fallbackPrefix != "" {
-				addName(l.fallbackPrefix + firstName)
+				fallbackPrefixedName := l.fallbackPrefix + firstName
+				addName(fallbackPrefixedName)
+				addStepIfPlanHasSteps(fallbackPrefixedName, nil)
 			}
 
 			addName(firstName)
+			addStepIfPlanHasSteps(firstName, nil)
 		}
 
 		for i := 1; i < len(ctx.EnvNames); i++ {
@@ -301,14 +334,18 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 			isFallbackQuoted := strings.HasPrefix(fallbackName, "'") && strings.HasSuffix(fallbackName, "'")
 
 			if isFallbackQuoted {
-				addName(strings.Trim(fallbackName, "'"))
+				name := strings.Trim(fallbackName, "'")
+				addName(name)
+				addStepIfPlanHasSteps(name, nil)
 			} else {
-				// Apply fallback prefix regardless of enablePrefixFallback - this is specifically what WithFallbackPrefix is for
 				if l.fallbackPrefix != "" {
-					addName(l.fallbackPrefix + fallbackName)
+					fbPrefixedName := l.fallbackPrefix + fallbackName
+					addName(fbPrefixedName)
+					addStepIfPlanHasSteps(fbPrefixedName, nil)
 				}
 
 				addName(fallbackName)
+				addStepIfPlanHasSteps(fallbackName, nil)
 			}
 		}
 	}
@@ -320,13 +357,17 @@ type DirectiveHandler func(ctx *FieldContext, dir Directive) error
 
 func (l *StructLoader) applyDirectives(ctx *FieldContext) error {
 	var err error
-	ctx.Variable, err = l.resolver.Coalesce(ctx.FinalNames...)
+
+	if len(ctx.SearchPlan.Steps) > 0 {
+		ctx.Variable, err = ctx.Resolver.ResolvePlan(ctx.SearchPlan)
+	} else {
+		ctx.Variable, err = ctx.Resolver.Coalesce(ctx.FinalNames...)
+	}
+
 	if err != nil {
 		return fmt.Errorf("error resolving variables: %w", err)
 	}
 
-	// Ensure that the variable has the correct order of tried names
-	// The FinalNames already has the correct order of priority
 	if len(ctx.FinalNames) > 0 {
 		ctx.Variable.AllNames = make([]string, len(ctx.FinalNames))
 		copy(ctx.Variable.AllNames, ctx.FinalNames)
@@ -354,7 +395,6 @@ func (l *StructLoader) setFieldValue(ctx *FieldContext) error {
 	fieldType := ctx.FieldValue.Type()
 	convertedVal := reflect.New(fieldType).Elem()
 
-	// Check if we should use a custom conversion method
 	if ctx.ConvertMethod != "" {
 		rawValue, err := ctx.Variable.String()
 		if err != nil {
@@ -656,8 +696,6 @@ func RangeFloatDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	return nil
 }
 
-// MinDirectiveHandler is a universal handler for minimum value validation
-// It detects the type of the field and applies the appropriate validator
 func MinDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	if len(dir.Params) != 1 {
 		return fmt.Errorf("min needs exactly one parameter")
@@ -702,8 +740,6 @@ func MinDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	return nil
 }
 
-// MaxDirectiveHandler is a universal handler for maximum value validation
-// It detects the type of the field and applies the appropriate validator
 func MaxDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	if len(dir.Params) != 1 {
 		return fmt.Errorf("max needs exactly one parameter")
@@ -748,8 +784,6 @@ func MaxDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	return nil
 }
 
-// RangeDirectiveHandler is a universal handler for range validation
-// It detects the type of the field and applies the appropriate validator
 func RangeDirectiveHandler(ctx *FieldContext, dir Directive) error {
 	if len(dir.Params) != 2 {
 		return fmt.Errorf("range needs exactly two parameters")
@@ -992,15 +1026,11 @@ func (h *MapHandler) HandleKind(ctx *FieldContext) (any, error) {
 	return nil, fmt.Errorf("unsupported map type %s", fieldType)
 }
 
-// StructHandler handles nested struct fields recursively
 type StructHandler struct{}
 
 func (h *StructHandler) HandleKind(ctx *FieldContext) (any, error) {
-	// Create a new instance of the struct type
 	fieldType := ctx.FieldValue.Type()
 	newStruct := reflect.New(fieldType).Interface()
-
-	// Check if this struct field has an env tag
 	tag, hasTag := ctx.Field.Tag.Lookup("env")
 
 	var opts []Option
@@ -1008,54 +1038,33 @@ func (h *StructHandler) HandleKind(ctx *FieldContext) (any, error) {
 	var fallbackPrefix string
 
 	if hasTag && tag != "" {
-		// Get the tag name (without directives)
 		tagName := strings.Split(tag, ";")[0]
 
 		if ctx.Prefix != "" && tagName != "" {
-			// If both parent has prefix and field has tag:
-			// For example: parent prefix is "APP_", field tag is "DB"
-
-			// Primary path: APP_DB_HOST
 			nestedPrefix = ctx.Prefix + tagName + "_"
-
-			// First fallback path (when using with PrefixFallback): DB_HOST
 			fallbackPrefix = tagName + "_"
 		} else if tagName != "" {
-			// Just field tag (no parent prefix): DB_HOST
 			nestedPrefix = tagName + "_"
 		} else if ctx.Prefix != "" {
-			// Only parent prefix, no field tag
 			nestedPrefix = ctx.Prefix
 		}
 
-		// Set the primary prefix for lookups
 		if nestedPrefix != "" {
 			opts = append(opts, WithPrefix(nestedPrefix))
 		}
 
-		// Configure fallback if enabled
 		if ctx.EnablePrefixFallback {
-			// Enable prefix fallback first
 			opts = append(opts, WithPrefixFallback(true))
-
-			// If we have a specific fallback prefix, add it
 			if fallbackPrefix != "" {
 				opts = append(opts, WithFallbackPrefix(fallbackPrefix))
 			}
 		}
 	} else {
-		// No env tag on the struct field
-		// For fields like "Logger LoggerConfig" (no tag), we want to load the fields directly
-
-		// If the parent has a prefix, pass it along
 		if ctx.Prefix != "" {
 			opts = append(opts, WithPrefix(ctx.Prefix))
 
-			// Pass along prefix fallback setting if enabled
 			if ctx.EnablePrefixFallback {
 				opts = append(opts, WithPrefixFallback(true))
-
-				// Pass along any fallback prefix from parent
 				if ctx.FallbackPrefix != "" {
 					opts = append(opts, WithFallbackPrefix(ctx.FallbackPrefix))
 				}
@@ -1063,34 +1072,29 @@ func (h *StructHandler) HandleKind(ctx *FieldContext) (any, error) {
 		}
 	}
 
-	// Pass along the parent's tag parser
 	if ctx.TagParser != nil {
 		opts = append(opts, WithTagParser(ctx.TagParser))
 	}
 
-	// Recursively load the struct with the appropriate options
+	if ctx.Resolver != nil {
+		opts = append(opts, WithResolver(ctx.Resolver))
+	}
+
 	err := Load(newStruct, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load nested struct: %w", err)
 	}
 
-	// Return the value (not the pointer)
 	return reflect.ValueOf(newStruct).Elem().Interface(), nil
 }
 
-// PointerHandler handles pointer fields
 type PointerHandler struct{}
 
 func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
-	// Get the pointed-to type
 	fieldType := ctx.FieldValue.Type().Elem()
-
-	// Create a new instance of the pointed-to type
 	newValue := reflect.New(fieldType)
 
-	// If it's a struct, handle it recursively
 	if fieldType.Kind() == reflect.Struct {
-		// Check if this pointer field has an env tag
 		tag, hasTag := ctx.Field.Tag.Lookup("env")
 
 		var opts []Option
@@ -1098,54 +1102,33 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 		var fallbackPrefix string
 
 		if hasTag && tag != "" {
-			// Get the tag name (without directives)
 			tagName := strings.Split(tag, ";")[0]
 
 			if ctx.Prefix != "" && tagName != "" {
-				// If both parent has prefix and field has tag:
-				// For example: parent prefix is "APP_", field tag is "DB"
-
-				// Primary path: APP_DB_HOST
 				nestedPrefix = ctx.Prefix + tagName + "_"
-
-				// First fallback path (when using with PrefixFallback): DB_HOST
 				fallbackPrefix = tagName + "_"
 			} else if tagName != "" {
-				// Just field tag (no parent prefix): DB_HOST
 				nestedPrefix = tagName + "_"
 			} else if ctx.Prefix != "" {
-				// Only parent prefix, no field tag
 				nestedPrefix = ctx.Prefix
 			}
 
-			// Set the primary prefix for lookups
 			if nestedPrefix != "" {
 				opts = append(opts, WithPrefix(nestedPrefix))
 			}
 
-			// Configure fallback if enabled
 			if ctx.EnablePrefixFallback {
-				// Enable prefix fallback first
 				opts = append(opts, WithPrefixFallback(true))
-
-				// If we have a specific fallback prefix, add it
 				if fallbackPrefix != "" {
 					opts = append(opts, WithFallbackPrefix(fallbackPrefix))
 				}
 			}
 		} else {
-			// No env tag on the pointer field
-			// For fields like "Logger *LoggerConfig" (no tag), we want to load the fields directly
-
-			// If the parent has a prefix, pass it along
 			if ctx.Prefix != "" {
 				opts = append(opts, WithPrefix(ctx.Prefix))
 
-				// Pass along prefix fallback setting if enabled
 				if ctx.EnablePrefixFallback {
 					opts = append(opts, WithPrefixFallback(true))
-
-					// Pass along any fallback prefix from parent
 					if ctx.FallbackPrefix != "" {
 						opts = append(opts, WithFallbackPrefix(ctx.FallbackPrefix))
 					}
@@ -1153,19 +1136,19 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 			}
 		}
 
-		// Pass along the parent's tag parser
 		if ctx.TagParser != nil {
 			opts = append(opts, WithTagParser(ctx.TagParser))
 		}
 
-		// Load the struct
+		if ctx.Resolver != nil {
+			opts = append(opts, WithResolver(ctx.Resolver))
+		}
+
 		err := Load(newValue.Interface(), opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load struct pointer: %w", err)
 		}
 	} else {
-		// For other pointer types, use reflection to set the value
-		// This is just a basic implementation - might need enhancement for specific types
 		return nil, fmt.Errorf("pointers to non-struct types are not supported yet")
 	}
 
@@ -1186,7 +1169,101 @@ type TagParser interface {
 	Parse(tag string) (Tag, error)
 }
 
+// parseSearchPlan parses a tag into a search plan
+func parseSearchPlan(tag string) (SearchPlan, error) {
+	var plan SearchPlan
+
+	// Split by ; and take only the first part (before directives)
+	parts := strings.Split(tag, ";")
+	if len(parts) == 0 {
+		return SearchPlan{Steps: []SearchStep{}}, nil
+	}
+
+	namesPart := parts[0]
+
+	// First check if any of the items have square brackets
+	// If none do, return an empty plan to trigger old behavior with prefixes/fallbacks
+	hadBrackets := false
+	splitted := strings.Split(namesPart, ",")
+	for _, rawName := range splitted {
+		if strings.Contains(rawName, "[") {
+			hadBrackets = true
+			break
+		}
+	}
+
+	// If no brackets found, return empty plan to use old-style resolution with prefixes
+	if !hadBrackets {
+		return SearchPlan{Steps: []SearchStep{}}, nil
+	}
+
+	// Only create a search plan with steps if at least one item has brackets
+	for _, item := range splitted {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+
+		step, err := parseNameWithLabels(item)
+		if err != nil {
+			return plan, fmt.Errorf("invalid name format: %w", err)
+		}
+
+		plan.Steps = append(plan.Steps, step)
+	}
+
+	return plan, nil
+}
+
+// parseNameWithLabels parses a name with optional labels in the format NAME[label1,label2]
+func parseNameWithLabels(nameStr string) (SearchStep, error) {
+	step := SearchStep{}
+
+	// Check if we have a labeled name
+	openBracketIdx := strings.Index(nameStr, "[")
+	if openBracketIdx == -1 {
+		// No labels, just a name
+		step.Name = nameStr
+		return step, nil
+	}
+
+	// We have something like "NAME[label1,label2]"
+	closeBracketIdx := strings.LastIndex(nameStr, "]")
+	if closeBracketIdx == -1 || closeBracketIdx <= openBracketIdx {
+		return step, fmt.Errorf("missing closing bracket")
+	}
+
+	// Extract the name and labels
+	step.Name = strings.TrimSpace(nameStr[:openBracketIdx])
+	if step.Name == "" {
+		return step, fmt.Errorf("empty name before labels")
+	}
+
+	// Extract and parse the labels
+	labelsStr := nameStr[openBracketIdx+1 : closeBracketIdx]
+	if labelsStr != "" {
+		labelsList := strings.Split(labelsStr, ",")
+		for _, label := range labelsList {
+			label = strings.TrimSpace(label)
+			if label != "" {
+				step.Labels = append(step.Labels, label)
+			}
+		}
+	}
+
+	// Check if there's anything after the closing bracket
+	if closeBracketIdx < len(nameStr)-1 {
+		return step, fmt.Errorf("unexpected characters after closing bracket")
+	}
+
+	return step, nil
+}
+
 type DefaultTagParser struct{}
+
+func (p *DefaultTagParser) formatError(err error) error {
+	return fmt.Errorf("invalid search plan: %w", err)
+}
 
 func NewTagParser() TagParser {
 	return &DefaultTagParser{}
@@ -1194,21 +1271,39 @@ func NewTagParser() TagParser {
 
 func (p *DefaultTagParser) Parse(tag string) (Tag, error) {
 	var result Tag
+	result.Names = []string{}
 	parts := strings.Split(tag, ";")
 
-	// Process the name part (before the first ;)
 	if len(parts) > 0 {
-		// Handle the names section (may be empty)
 		namesList := strings.Split(parts[0], ",")
 		for _, name := range namesList {
 			name = strings.TrimSpace(name)
 			if name != "" {
-				result.Names = append(result.Names, name)
+				// Extract name without labels
+				nameOnly := name
+				if openBracketIdx := strings.Index(name, "["); openBracketIdx != -1 {
+					closeBracketIdx := strings.LastIndex(name, "]")
+					if closeBracketIdx == -1 || closeBracketIdx <= openBracketIdx {
+						return result, p.formatError(fmt.Errorf("missing closing bracket"))
+					}
+					if closeBracketIdx < len(name)-1 {
+						return result, p.formatError(fmt.Errorf("unexpected characters after closing bracket"))
+					}
+					nameOnly = strings.TrimSpace(name[:openBracketIdx])
+					if nameOnly == "" {
+						return result, p.formatError(fmt.Errorf("empty name before labels"))
+					}
+				}
+				if strings.Contains(name, "]") && !strings.Contains(name, "[") {
+					return result, p.formatError(fmt.Errorf("invalid label syntax"))
+				}
+				if nameOnly != "" {
+					result.Names = append(result.Names, nameOnly)
+				}
 			}
 		}
 	}
 
-	// Process directives (after ;)
 	for i := 1; i < len(parts); i++ {
 		part := strings.TrimSpace(parts[i])
 		if part == "" {
@@ -1406,12 +1501,10 @@ func callConvertMethod(cfg any, methodName string, stringValue string, targetTyp
 		return nil, fmt.Errorf("conversion method %s must return (value, error)", methodName)
 	}
 
-	// Ensure the method accepts a string parameter
 	if methodType.In(0).Kind() != reflect.String {
 		return nil, fmt.Errorf("conversion method %s must accept a string parameter", methodName)
 	}
 
-	// Ensure the method returns the correct type
 	if !methodType.Out(0).AssignableTo(targetType) {
 		return nil, fmt.Errorf("conversion method %s returns type %s, but field is of type %s",
 			methodName, methodType.Out(0), targetType)
@@ -1419,12 +1512,10 @@ func callConvertMethod(cfg any, methodName string, stringValue string, targetTyp
 
 	results := method.Call([]reflect.Value{reflect.ValueOf(stringValue)})
 
-	// Handle error
 	errInterface := results[1].Interface()
 	if errInterface != nil {
 		return nil, errInterface.(error)
 	}
 
-	// Return the converted value
 	return results[0].Interface(), nil
 }

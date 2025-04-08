@@ -1,9 +1,7 @@
 package envx
 
 // DefaultResolver is the global resolver used by the package functions.
-// By default, it contains only an EnvSource for backward compatibility
-// and uses ContinueOnError for backward compatibility.
-var DefaultResolver Resolver = NewResolver(EnvSource{}).WithErrorHandler(ContinueOnError)
+var DefaultResolver Resolver = initDefaultResolver()
 
 // Get looks up a variable by name from the DefaultResolver.
 // For backward compatibility, ignores errors from the resolver.
@@ -18,4 +16,10 @@ func Get(name string) *Variable {
 func Coalesce(names ...string) *Variable {
 	v, _ := DefaultResolver.Coalesce(names...)
 	return v
+}
+
+func initDefaultResolver() Resolver {
+	resolver := NewResolver().WithErrorHandler(ContinueOnError)
+	resolver.AddSource(EnvSource{}, WithLabels("env", "default"))
+	return resolver
 }
