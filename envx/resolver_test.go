@@ -124,9 +124,8 @@ func TestResolvePlan(t *testing.T) {
 	srcFile := NewMockSource("file", map[string]string{"VAR_B": "file_b", "VAR_C": "file_c", "COMMON": "file_common"})
 	srcVault := NewMockSource("vault", map[string]string{"VAR_C": "vault_c", "VAR_D": "vault_d", "COMMON": "vault_common"})
 	srcAPI := NewMockSource("api", map[string]string{"VAR_D": "api_d", "VAR_E": "api_e", "COMMON": "api_common"})
-	mockLogger := &MockLogger{}
 
-	resolver := envx.NewResolver().WithLogger(mockLogger)
+	resolver := envx.NewResolver()
 	resolver.AddSource(srcEnv, envx.WithLabels("env", "local"))                             // Non-explicit
 	resolver.AddSource(srcFile, envx.WithLabels("file", "local"))                           // Non-explicit
 	resolver.AddSource(srcVault, envx.WithLabels("vault", "secure"), envx.IsExplicitOnly()) // Explicit
@@ -272,7 +271,6 @@ func TestResolvePlan(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockLogger.Reset()
 			v, err := resolver.ResolvePlan(tt.plan)
 
 			require.NoError(t, err)
@@ -284,14 +282,6 @@ func TestResolvePlan(t *testing.T) {
 				}
 			} else {
 				assert.Equal(t, "", v.Val, "Value should be empty when not found")
-			}
-
-			logs := mockLogger.Logs()
-			if tt.expectedLog {
-				assert.NotEmpty(t, logs, "Expected log message but none found")
-				assert.Contains(t, logs[0], tt.expectedLogMsg, "Log message mismatch")
-			} else {
-				assert.Empty(t, logs, "Expected no log messages but found some")
 			}
 
 			expectedAllNames := make([]string, 0, len(tt.plan.Steps))

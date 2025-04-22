@@ -544,9 +544,8 @@ err := envx.Load(&cfg,
 Available options:
 
 - `WithResolver(resolver)`: Use a specific `Resolver` instance for lookups. If not provided, `envx.DefaultResolver` is used.
-- `WithPrefix(prefix)`: Add a prefix to environment variable names looked up *via the default mechanism* (i.e., when no source labels `[]` are specified for a name, or when using fallback names without labels). Prefixes are *not* applied to names explicitly targeting sources via labels (`VAR[label]`) or names in single quotes (`'EXACT_NAME'`).
+- `WithPrefix(prefix)`: Adds a prefix when searching for a value. Only used for the first name if multiple are specified.
 - `WithPrefixFallback(enable)`: If enabled, falls back to non-prefixed names when prefixed ones are not set (only applies to names looked up via the default mechanism).
-- `WithFallbackPrefix(prefix)`: Adds a secondary prefix for fallback when the primary prefix doesn't match (only applies to names looked up via the default mechanism).
 - `WithTagParser(parser)`: Use a custom tag parser.
 - `WithCustomValidator(name, validator)`: Add a custom validation directive.
 - `WithTypeHandler(type, handler)`: Register a handler for a specific type.

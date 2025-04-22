@@ -83,8 +83,9 @@ func (ls *labeledSource) hasAnyLabel(labels []string) bool {
 // SearchStep represents a single step in a search plan, containing a variable
 // name and optional source labels to search.
 type SearchStep struct {
-	Name   string
-	Labels []string
+	Name     string
+	Labels   []string
+	IsQuoted bool
 }
 
 // SearchPlan represents a complete plan for searching for variables across sources.
@@ -262,27 +263,13 @@ func (r *StandardResolver) ResolvePlan(plan SearchPlan) (*Variable, error) {
 		return &Variable{AllNames: []string{}}, nil
 	}
 
-	// Store all names to try in the correct order
 	allNames := make([]string, len(plan.Steps))
 	for i, step := range plan.Steps {
 		allNames[i] = step.Name
 	}
 
-	// Try each step in the plan
 	for _, step := range plan.Steps {
-		// For testing: MockLogger is defined in resolver_test.go
-		// Clear previous warnings if the logger is the test MockLogger
-		mockLogger, isMockLogger := r.logger.(interface {
-			Reset()
-		})
-		if isMockLogger {
-			mockLogger.Reset()
-		}
-
-		// Get filtered sources for this step
 		sources := r.getFilteredSourcesForStep(step)
-
-		// Try to find the value in each filtered source
 		for _, src := range sources {
 			val, exist, err := src.source.Lookup(step.Name)
 			if err != nil {
@@ -294,7 +281,6 @@ func (r *StandardResolver) ResolvePlan(plan SearchPlan) (*Variable, error) {
 				if !continueResolution {
 					return nil, handlerErr
 				}
-				// Continue to next source if handler allows
 				continue
 			}
 			if exist && val != "" {

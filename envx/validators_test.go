@@ -7,8 +7,26 @@ import (
 	. "github.com/velmie/x/envx"
 )
 
+func init() {
+	// Initialize DefaultResolver for tests
+	resolver := NewResolver()
+	resolver.WithErrorHandler(ContinueOnError)
+	resolver.AddSource(EnvSource{})
+	DefaultResolver = resolver
+}
+
 func TestRangeValidators(t *testing.T) {
+	// Clear environment variables before each run
+	os.Clearenv()
+
+	// Setup DefaultResolver for each test
+	resolver := NewResolver()
+	resolver.WithErrorHandler(ContinueOnError)
+	resolver.AddSource(EnvSource{})
+	DefaultResolver = resolver
+
 	t.Run("String length validators", func(t *testing.T) {
+		// Setup environment variables
 		os.Setenv("MIN_LENGTH", "abc")
 		os.Setenv("MAX_LENGTH", "abcdefghij")
 		os.Setenv("EXACT_LENGTH", "abcde")

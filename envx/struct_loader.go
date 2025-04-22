@@ -12,6 +12,20 @@ import (
 	"unicode"
 )
 
+type Tag struct {
+	Names      []string
+	Directives []Directive
+}
+
+type Directive struct {
+	Name   string
+	Params []string
+}
+
+type TagParser interface {
+	Parse(tag string) (Tag, error)
+}
+
 type Option func(*StructLoader)
 
 func WithPrefix(prefix string) Option {
@@ -23,12 +37,6 @@ func WithPrefix(prefix string) Option {
 func WithPrefixFallback(enable bool) Option {
 	return func(l *StructLoader) {
 		l.enablePrefixFallback = enable
-	}
-}
-
-func WithFallbackPrefix(prefix string) Option {
-	return func(l *StructLoader) {
-		l.fallbackPrefix = prefix
 	}
 }
 
@@ -64,7 +72,6 @@ func Load(cfg any, opts ...Option) error {
 type StructLoader struct {
 	prefix               string
 	enablePrefixFallback bool
-	fallbackPrefix       string
 	tagParser            TagParser
 	typeHandlers         map[reflect.Type]TypeHandler
 	kindHandlers         map[reflect.Kind]KindHandler
@@ -82,7 +89,6 @@ func NewStructLoader(opts ...Option) *StructLoader {
 	loader := &StructLoader{
 		prefix:               "",
 		enablePrefixFallback: false,
-		fallbackPrefix:       "",
 		tagParser:            NewTagParser(),
 		typeHandlers:         make(map[reflect.Type]TypeHandler),
 		kindHandlers:         make(map[reflect.Kind]KindHandler),
@@ -165,10 +171,6 @@ func (l *StructLoader) Load(cfg any) error {
 			continue
 		}
 
-		if len(ctx.EnvNames) == 0 {
-			continue
-		}
-
 		err = l.applyDirectives(ctx)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("applying directives for field %s: %w", field.Name, err))
@@ -193,7 +195,6 @@ type FieldContext struct {
 	Target               any
 	Field                reflect.StructField
 	FieldValue           reflect.Value
-	EnvNames             []string
 	FinalNames           []string
 	Directives           []Directive
 	ValidateMethod       string
@@ -203,7 +204,6 @@ type FieldContext struct {
 	Variable             *Variable
 	Prefix               string
 	EnablePrefixFallback bool
-	FallbackPrefix       string
 	TagParser            TagParser
 	SearchPlan           SearchPlan
 	Resolver             Resolver
@@ -218,7 +218,6 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		TimeLayout:           time.RFC3339,
 		Prefix:               l.prefix,
 		EnablePrefixFallback: l.enablePrefixFallback,
-		FallbackPrefix:       l.fallbackPrefix,
 		TagParser:            l.tagParser,
 		Resolver:             l.resolver,
 	}
@@ -229,31 +228,7 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 		if err != nil {
 			return nil, fmt.Errorf("invalid tag: %w", err)
 		}
-
-		ctx.EnvNames = tag.Names
 		ctx.Directives = tag.Directives
-
-		// Parse the search plan from the tag
-		plan, err := parseSearchPlan(tagValue)
-		if err != nil {
-			return nil, fmt.Errorf("invalid search plan: %w", err)
-		}
-		ctx.SearchPlan = plan
-
-		trimmedTagValue := strings.TrimSpace(tagValue)
-		if len(ctx.EnvNames) == 0 && (strings.HasPrefix(trimmedTagValue, ";") || trimmedTagValue == "") {
-			fieldName := toEnvNameFormat(field.Name)
-			ctx.EnvNames = []string{fieldName}
-			// Don't add steps to the SearchPlan for empty tags to preserve the old behavior
-			// Empty SearchPlan triggers the Coalesce with prefixes path
-		}
-
-		if strings.HasPrefix(trimmedTagValue, ",") {
-			fieldName := toEnvNameFormat(field.Name)
-			ctx.EnvNames = append([]string{fieldName}, ctx.EnvNames...)
-			// Only add steps if we have brackets (if SearchPlan already has steps)
-			// Otherwise preserve old behavior with prefixes
-		}
 
 		for _, dir := range ctx.Directives {
 			switch dir.Name {
@@ -275,80 +250,13 @@ func (l *StructLoader) createFieldContext(cfg any, field reflect.StructField, fi
 				}
 			}
 		}
-	} else {
-		fieldName := toEnvNameFormat(field.Name)
-		ctx.EnvNames = []string{fieldName}
-		// Don't add steps to SearchPlan for fields without env tag
-		// This preserves the old behavior with prefixes
 	}
 
-	ctx.FinalNames = []string{}
-	processedNames := make(map[string]struct{})
-
-	addName := func(name string) {
-		if _, exists := processedNames[name]; !exists && name != "" {
-			ctx.FinalNames = append(ctx.FinalNames, name)
-			processedNames[name] = struct{}{}
-		}
+	plan, err := l.parseSearchPlan(field, tagValue)
+	if err != nil {
+		return nil, fmt.Errorf("invalid search plan: %w", err)
 	}
-
-	// Check if we need to add steps to the search plan for cases where there are no brackets
-	// Only add to plan if it already has steps, which means some field had brackets
-	addStepIfPlanHasSteps := func(name string, labels []string) {
-		// Only if any field has labels (brackets), append this name to the plan
-		if len(ctx.SearchPlan.Steps) > 0 {
-			ctx.SearchPlan.Steps = append(ctx.SearchPlan.Steps, SearchStep{
-				Name:   name,
-				Labels: labels,
-			})
-		}
-	}
-
-	if len(ctx.EnvNames) > 0 {
-		firstName := ctx.EnvNames[0]
-		isFirstNameQuoted := strings.HasPrefix(firstName, "'") && strings.HasSuffix(firstName, "'")
-
-		if isFirstNameQuoted {
-			name := strings.Trim(firstName, "'")
-			addName(name)
-			addStepIfPlanHasSteps(name, nil)
-		} else {
-			if l.prefix != "" {
-				prefixedName := l.prefix + firstName
-				addName(prefixedName)
-				addStepIfPlanHasSteps(prefixedName, nil)
-			}
-
-			if l.enablePrefixFallback && l.fallbackPrefix != "" {
-				fallbackPrefixedName := l.fallbackPrefix + firstName
-				addName(fallbackPrefixedName)
-				addStepIfPlanHasSteps(fallbackPrefixedName, nil)
-			}
-
-			addName(firstName)
-			addStepIfPlanHasSteps(firstName, nil)
-		}
-
-		for i := 1; i < len(ctx.EnvNames); i++ {
-			fallbackName := ctx.EnvNames[i]
-			isFallbackQuoted := strings.HasPrefix(fallbackName, "'") && strings.HasSuffix(fallbackName, "'")
-
-			if isFallbackQuoted {
-				name := strings.Trim(fallbackName, "'")
-				addName(name)
-				addStepIfPlanHasSteps(name, nil)
-			} else {
-				if l.fallbackPrefix != "" {
-					fbPrefixedName := l.fallbackPrefix + fallbackName
-					addName(fbPrefixedName)
-					addStepIfPlanHasSteps(fbPrefixedName, nil)
-				}
-
-				addName(fallbackName)
-				addStepIfPlanHasSteps(fallbackName, nil)
-			}
-		}
-	}
+	ctx.SearchPlan = plan
 
 	return ctx, nil
 }
@@ -1035,14 +943,12 @@ func (h *StructHandler) HandleKind(ctx *FieldContext) (any, error) {
 
 	var opts []Option
 	var nestedPrefix string
-	var fallbackPrefix string
 
 	if hasTag && tag != "" {
 		tagName := strings.Split(tag, ";")[0]
 
 		if ctx.Prefix != "" && tagName != "" {
 			nestedPrefix = ctx.Prefix + tagName + "_"
-			fallbackPrefix = tagName + "_"
 		} else if tagName != "" {
 			nestedPrefix = tagName + "_"
 		} else if ctx.Prefix != "" {
@@ -1055,20 +961,10 @@ func (h *StructHandler) HandleKind(ctx *FieldContext) (any, error) {
 
 		if ctx.EnablePrefixFallback {
 			opts = append(opts, WithPrefixFallback(true))
-			if fallbackPrefix != "" {
-				opts = append(opts, WithFallbackPrefix(fallbackPrefix))
-			}
 		}
 	} else {
 		if ctx.Prefix != "" {
 			opts = append(opts, WithPrefix(ctx.Prefix))
-
-			if ctx.EnablePrefixFallback {
-				opts = append(opts, WithPrefixFallback(true))
-				if ctx.FallbackPrefix != "" {
-					opts = append(opts, WithFallbackPrefix(ctx.FallbackPrefix))
-				}
-			}
 		}
 	}
 
@@ -1099,14 +995,12 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 
 		var opts []Option
 		var nestedPrefix string
-		var fallbackPrefix string
 
 		if hasTag && tag != "" {
 			tagName := strings.Split(tag, ";")[0]
 
 			if ctx.Prefix != "" && tagName != "" {
 				nestedPrefix = ctx.Prefix + tagName + "_"
-				fallbackPrefix = tagName + "_"
 			} else if tagName != "" {
 				nestedPrefix = tagName + "_"
 			} else if ctx.Prefix != "" {
@@ -1119,9 +1013,6 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 
 			if ctx.EnablePrefixFallback {
 				opts = append(opts, WithPrefixFallback(true))
-				if fallbackPrefix != "" {
-					opts = append(opts, WithFallbackPrefix(fallbackPrefix))
-				}
 			}
 		} else {
 			if ctx.Prefix != "" {
@@ -1129,9 +1020,6 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 
 				if ctx.EnablePrefixFallback {
 					opts = append(opts, WithPrefixFallback(true))
-					if ctx.FallbackPrefix != "" {
-						opts = append(opts, WithFallbackPrefix(ctx.FallbackPrefix))
-					}
 				}
 			}
 		}
@@ -1155,105 +1043,152 @@ func (h *PointerHandler) HandleKind(ctx *FieldContext) (any, error) {
 	return newValue.Interface(), nil
 }
 
-type Tag struct {
-	Names      []string
-	Directives []Directive
-}
-
-type Directive struct {
-	Name   string
-	Params []string
-}
-
-type TagParser interface {
-	Parse(tag string) (Tag, error)
-}
-
 // parseSearchPlan parses a tag into a search plan
-func parseSearchPlan(tag string) (SearchPlan, error) {
-	var plan SearchPlan
-
-	// Split by ; and take only the first part (before directives)
+func (l *StructLoader) parseSearchPlan(field reflect.StructField, tag string) (SearchPlan, error) {
 	parts := strings.Split(tag, ";")
 	if len(parts) == 0 {
-		return SearchPlan{Steps: []SearchStep{}}, nil
+		return SearchPlan{}, nil
 	}
 
-	namesPart := parts[0]
-
-	// First check if any of the items have square brackets
-	// If none do, return an empty plan to trigger old behavior with prefixes/fallbacks
-	hadBrackets := false
-	splitted := strings.Split(namesPart, ",")
-	for _, rawName := range splitted {
-		if strings.Contains(rawName, "[") {
-			hadBrackets = true
-			break
-		}
+	names := parts[0]
+	if names == "" {
+		names = toEnvNameFormat(field.Name)
+	}
+	steps, err := parseSearchSteps(names)
+	if err != nil {
+		return SearchPlan{}, fmt.Errorf("failed to parse search steps: %w", err)
 	}
 
-	// If no brackets found, return empty plan to use old-style resolution with prefixes
-	if !hadBrackets {
-		return SearchPlan{Steps: []SearchStep{}}, nil
-	}
-
-	// Only create a search plan with steps if at least one item has brackets
-	for _, item := range splitted {
-		item = strings.TrimSpace(item)
-		if item == "" {
+	var planSteps []SearchStep
+	for i, s := range steps {
+		if l.prefix != "" && i == 0 && !s.IsQuoted {
+			prefixed := SearchStep{
+				Name:     l.prefix + s.Name,
+				Labels:   s.Labels,
+				IsQuoted: false,
+			}
+			planSteps = append(planSteps, prefixed)
+			if l.enablePrefixFallback {
+				planSteps = append(planSteps, s)
+			}
 			continue
 		}
-
-		step, err := parseNameWithLabels(item)
-		if err != nil {
-			return plan, fmt.Errorf("invalid name format: %w", err)
-		}
-
-		plan.Steps = append(plan.Steps, step)
+		planSteps = append(planSteps, s)
 	}
 
-	return plan, nil
+	return SearchPlan{Steps: planSteps}, nil
 }
 
-// parseNameWithLabels parses a name with optional labels in the format NAME[label1,label2]
-func parseNameWithLabels(nameStr string) (SearchStep, error) {
-	step := SearchStep{}
+func parseSearchSteps(input string) ([]SearchStep, error) {
+	var steps []SearchStep
+	start := 0
+	n := len(input)
+	inQuotes := false
+	bracketLevel := 0
 
-	// Check if we have a labeled name
-	openBracketIdx := strings.Index(nameStr, "[")
-	if openBracketIdx == -1 {
-		// No labels, just a name
-		step.Name = nameStr
-		return step, nil
+	for i := 0; i <= n; i++ {
+		isEndOfSegment := (i == n)
+		isSeparator := false
+
+		if i < n {
+			char := input[i]
+			if char == '\'' {
+				inQuotes = !inQuotes
+			} else if !inQuotes {
+				if char == '[' {
+					bracketLevel++
+				} else if char == ']' {
+					bracketLevel--
+				} else if char == ',' && bracketLevel == 0 {
+					isSeparator = true
+				}
+			}
+		}
+
+		if isSeparator || isEndOfSegment {
+			segment := input[start:i]
+			trimmedSegment := strings.TrimSpace(segment)
+
+			if len(trimmedSegment) > 0 {
+				step, err := parseSingleStep(trimmedSegment)
+				if err != nil {
+					return nil, fmt.Errorf("error parsing segment '%s' (near index %d): %w", trimmedSegment, start, err)
+				}
+				steps = append(steps, step)
+			} else if len(segment) > 0 && isSeparator {
+				// Skip empty segments like from ",,"
+			}
+			start = i + 1
+		}
 	}
 
-	// We have something like "NAME[label1,label2]"
-	closeBracketIdx := strings.LastIndex(nameStr, "]")
-	if closeBracketIdx == -1 || closeBracketIdx <= openBracketIdx {
-		return step, fmt.Errorf("missing closing bracket")
+	if inQuotes {
+		return nil, fmt.Errorf("unmatched single quote found at end of input")
+	}
+	if bracketLevel != 0 {
+		if bracketLevel > 0 {
+			return nil, fmt.Errorf("mismatched square brackets (extra '[' found)")
+		}
+		return nil, fmt.Errorf("mismatched square brackets (extra ']' found)")
 	}
 
-	// Extract the name and labels
-	step.Name = strings.TrimSpace(nameStr[:openBracketIdx])
-	if step.Name == "" {
-		return step, fmt.Errorf("empty name before labels")
+	return steps, nil
+}
+
+func parseSingleStep(segment string) (SearchStep, error) {
+	step := SearchStep{Labels: []string{}}
+
+	namePart := segment
+	labelPart := ""
+
+	labelOpenIdx := strings.IndexByte(segment, '[')
+
+	if labelOpenIdx != -1 {
+		if segment[len(segment)-1] == ']' {
+			labelCloseIdx := len(segment) - 1
+			if labelOpenIdx < labelCloseIdx {
+				namePart = strings.TrimSpace(segment[:labelOpenIdx])
+				labelPart = segment[labelOpenIdx+1 : labelCloseIdx]
+			} else if labelOpenIdx+1 == labelCloseIdx {
+				namePart = strings.TrimSpace(segment[:labelOpenIdx])
+				labelPart = ""
+			} else {
+				return SearchStep{}, fmt.Errorf("invalid bracket placement, '[' not before ']': %s", segment)
+			}
+		} else {
+			return SearchStep{}, fmt.Errorf("found '[' but segment does not end with matching ']': %s", segment)
+		}
 	}
 
-	// Extract and parse the labels
-	labelsStr := nameStr[openBracketIdx+1 : closeBracketIdx]
-	if labelsStr != "" {
-		labelsList := strings.Split(labelsStr, ",")
-		for _, label := range labelsList {
-			label = strings.TrimSpace(label)
-			if label != "" {
-				step.Labels = append(step.Labels, label)
+	if len(namePart) >= 2 && namePart[0] == '\'' && namePart[len(namePart)-1] == '\'' {
+		step.Name = namePart[1 : len(namePart)-1]
+		step.IsQuoted = true
+	} else {
+		if strings.ContainsAny(namePart, "'[]") {
+			return SearchStep{}, fmt.Errorf("unquoted name '%s' contains invalid characters (' , [ , ])", namePart)
+		}
+		step.Name = namePart
+		step.IsQuoted = false
+	}
+
+	if step.Name == "" && !step.IsQuoted {
+		return SearchStep{}, fmt.Errorf("parsed step has empty unquoted name in segment: %s", segment)
+	}
+
+	if labelPart != "" {
+		rawLabels := strings.Split(labelPart, ",")
+		for _, lbl := range rawLabels {
+			trimmedLabel := strings.TrimSpace(lbl)
+			if trimmedLabel != "" {
+				if strings.ContainsAny(trimmedLabel, "'[]") {
+					return SearchStep{}, fmt.Errorf("label '%s' contains invalid characters (' , [ , ])", trimmedLabel)
+				}
+				step.Labels = append(step.Labels, trimmedLabel)
 			}
 		}
 	}
-
-	// Check if there's anything after the closing bracket
-	if closeBracketIdx < len(nameStr)-1 {
-		return step, fmt.Errorf("unexpected characters after closing bracket")
+	if step.Labels == nil {
+		step.Labels = []string{}
 	}
 
 	return step, nil

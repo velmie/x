@@ -2,6 +2,7 @@ package envx_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -194,7 +195,7 @@ func TestStructLoaderLabelInteractionWithPrefix(t *testing.T) {
 	})
 
 	t.Run("Nested Mixed Tags with Prefix", func(t *testing.T) {
-		srcVault.data["NESTED_SECRET"] = "nested_vault_secret"
+		srcVault.data["P_NESTED_SECRET"] = "nested_vault_secret"
 		srcEnv.data["P_NESTED_SIMPLE"] = "prefixed_nested_simple_env"
 		srcEnv.data["P_OUTER_SIMPLE"] = "prefixed_outer_simple_env"
 
@@ -280,13 +281,10 @@ func TestStructLoaderInvalidLabelSyntaxError(t *testing.T) {
 func TestStructLoaderEmptyPlanVsCoalesce(t *testing.T) {
 	resolver, srcEnv, _, srcVault, _ := newTestResolver()
 	prefix := "P_"
-	fallbackPrefix := "F_"
 
 	srcEnv.data[prefix+"VAR1"] = "p_var1"
-	srcEnv.data[fallbackPrefix+"VAR1"] = "f_var1"
 	srcEnv.data["VAR1"] = "var1"
 
-	srcEnv.data[fallbackPrefix+"VAR2"] = "f_var2"
 	srcEnv.data["VAR2"] = "var2"
 
 	srcEnv.data["VAR3"] = "var3"
@@ -296,7 +294,6 @@ func TestStructLoaderEmptyPlanVsCoalesce(t *testing.T) {
 	opts := []envx.Option{
 		envx.WithPrefix(prefix),
 		envx.WithPrefixFallback(true),
-		envx.WithFallbackPrefix(fallbackPrefix),
 		envx.WithResolver(resolver),
 	}
 
@@ -310,7 +307,7 @@ func TestStructLoaderEmptyPlanVsCoalesce(t *testing.T) {
 		err := envx.Load(&cfg, opts...)
 		require.NoError(t, err)
 		assert.Equal(t, "p_var1", cfg.Var1)
-		assert.Equal(t, "f_var2", cfg.Var2)
+		assert.Equal(t, "var2", cfg.Var2)
 		assert.Equal(t, "var3", cfg.Var3)
 	})
 
@@ -326,7 +323,7 @@ func TestStructLoaderEmptyPlanVsCoalesce(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "secret", cfg.Secret)
 		assert.Equal(t, "p_var1", cfg.Var1)
-		assert.Equal(t, "f_var2", cfg.Var2)
+		assert.Equal(t, "var2", cfg.Var2)
 		assert.Equal(t, "var3", cfg.Var3)
 	})
 }
@@ -345,6 +342,73 @@ func TestStructLoader_RequiredFieldsAdapt(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not set")
 	assert.Contains(t, err.Error(), "REQUIRED_ADAPT")
+}
+
+func TestStructLoader_ExplicitMapSource_WithPrefix(t *testing.T) {
+	// Setup: clean environment and create a temporary .env file
+	os.Clearenv()
+	tempEnv := t.TempDir()
+	envPath := filepath.Join(tempEnv, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(`
+APP_NAME=App Name From Env File
+PREFIXED_VALUE=I'm prefixed value
+`), 0644))
+
+	// Map source - only for label "map", explicit-only
+	mapSrc := envx.NewMapSource(
+		map[string]string{"PREFIXED_APP_NAME": "My App Name From Map"},
+		"map",
+	)
+	resolver := envx.NewResolver().WithErrorHandler(envx.ContinueOnError)
+	resolver.AddSource(mapSrc, envx.WithLabels("map"), envx.IsExplicitOnly())
+	efs, err := envx.NewEnvFileSource(envPath)
+	require.NoError(t, err)
+	resolver.AddSource(efs, envx.WithLabels("envfile"))
+	// Override DefaultResolver with our test resolver
+	envx.DefaultResolver = resolver
+
+	type Config struct {
+		AppName string `env:"APP_NAME[map];required"`
+	}
+	var cfg Config
+
+	// Execute Load with prefix
+	err = envx.Load(&cfg, envx.WithPrefix("PREFIXED_"))
+	require.NoError(t, err)
+	// Expect value only from mapSrc + prefix
+	assert.Equal(t, "My App Name From Map", cfg.AppName)
+}
+
+func TestStructLoader_ExplicitMapSource_DualNameWithPrefix(t *testing.T) {
+	os.Clearenv()
+	// .env file with APP_VERSION
+	tempEnv := t.TempDir()
+	envPath := filepath.Join(tempEnv, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(`
+APP_VERSION=1.2.3 From Env File
+`), 0644))
+
+	mapSrc := envx.NewMapSource(
+		map[string]string{"PREFIXED_APP_VERSION": "2.0.0 From Map"},
+		"map",
+	)
+	resolver := envx.NewResolver().WithErrorHandler(envx.ContinueOnError)
+	resolver.AddSource(mapSrc, envx.WithLabels("map"), envx.IsExplicitOnly())
+	efs, err := envx.NewEnvFileSource(envPath)
+	require.NoError(t, err)
+	resolver.AddSource(efs, envx.WithLabels("envfile"))
+	envx.DefaultResolver = resolver
+
+	type Config struct {
+		AppVersion string `env:"APP_VERSION[map];required"`
+	}
+	var cfg Config
+
+	err = envx.Load(&cfg, envx.WithPrefix("PREFIXED_"))
+	require.NoError(t, err)
+	// Since the second name in the list is marked with [map], and it's explicit-only,
+	// and prefix applies to lookup in mapSrc, the value should be from there
+	assert.Equal(t, "2.0.0 From Map", cfg.AppVersion)
 }
 
 func TestDefaultResolverWithSources(t *testing.T) {
