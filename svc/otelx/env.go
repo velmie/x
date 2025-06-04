@@ -13,7 +13,7 @@ var env = envx.CreatePrototype().WithPrefix("TRACING_")
 func ConfigFromEnv() (*Config, error) {
 	c := &Config{}
 
-	disabled := env.Get("DISABLED")
+	disabled := envx.Coalesce("OTEL_SDK_DISABLED", "TRACING_DISABLED")
 	err := envx.Supply(
 		envx.Set(&c.Disabled, envx.Default(DefaultConfig.Disabled, disabled, disabled.Boolean)),
 		envx.Set(&c.Communication, communicationConfigFromEnv),
@@ -53,7 +53,7 @@ func samplingConfigFromEnv() (SamplingConfig, error) {
 	d := DefaultConfig.Sampling
 	c := SamplingConfig{}
 
-	ratio := env.Get("SAMPLING_RATIO")
+	ratio := envx.Coalesce("OTEL_TRACES_SAMPLER_ARG", "TRACING_SAMPLING_RATIO")
 	err := envx.Supply(
 		envx.Set(&c.Ratio, envx.Default(d.Ratio, ratio, ratio.Float64)),
 	)
@@ -67,8 +67,8 @@ func resourceConfigFromEnv() (ResourceConfig, error) {
 	d := DefaultConfig.Resource
 	c := ResourceConfig{}
 
-	serviceName := env.Get("RESOURCE_SERVICE_NAME").Default(c.ServiceName)
-	attributes := env.Get("RESOURCE_ATTRIBUTES").Expand()
+	serviceName := envx.Coalesce("OTEL_SERVICE_NAME", "TRACING_RESOURCE_SERVICE_NAME").Default(c.ServiceName)
+	attributes := envx.Coalesce("OTEL_RESOURCE_ATTRIBUTES", "TRACING_RESOURCE_ATTRIBUTES").Expand()
 	deploymentEnvironment := env.Get("RESOURCE_DEPLOYMENT_ENVIRONMENT").Default(c.DeploymentEnvironment)
 	detectors := env.Get("RESOURCE_DETECTORS")
 
@@ -110,9 +110,21 @@ func communicationConfigFromEnv() (CommunicationConfig, error) {
 	d := DefaultConfig.Communication
 	c := CommunicationConfig{}
 
+	endpoint := envx.Coalesce(
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"TRACING_COMMUNICATION_ENDPOINT",
+	).Default(d.Endpoint)
+
+	exportMethod := envx.Coalesce(
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_PROTOCOL",
+		"TRACING_COMMUNICATION_EXPORT_METHOD",
+	).Default(d.ExportMethod)
+
 	err := envx.Supply(
-		envx.Set(&c.Endpoint, env.Get("COMMUNICATION_ENDPOINT").Default(d.Endpoint).String),
-		envx.Set(&c.ExportMethod, env.Get("COMMUNICATION_EXPORT_METHOD").Default(d.ExportMethod).String),
+		envx.Set(&c.Endpoint, endpoint.String),
+		envx.Set(&c.ExportMethod, exportMethod.String),
 	)
 
 	return c, err

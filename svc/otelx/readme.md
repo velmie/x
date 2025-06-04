@@ -7,22 +7,24 @@ This package simplifies the process of configuring and initializing OpenTelemetr
 It includes a function for reading configuration values from environment variables. Below is a table describing the
 available environment variables:
 
-| Variable                                | Description                                                   | Default Value |
-|-----------------------------------------|---------------------------------------------------------------|---------------|
-| TRACING_DISABLED                        | Disables tracing by setting noop exporter                     | false         |
-| TRACING_PROPAGATION_BAGGAGE             | Enables or disables baggage propagation                       | true          |
-| TRACING_PROPAGATION_TRACE_CONTEXT       | Enables or disables trace context propagation                 | true          |
-| TRACING_PROPAGATION_B3_MULTIPLE_HEADER  | Enables or disables B3 multiple header propagation            | false         |
-| TRACING_PROPAGATION_B3_SINGLE_HEADER    | Enables or disables B3 single header propagation              | true          |
-| TRACING_SAMPLING_RATIO                  | Sets the sampling ratio for traces                            | 1             |
-| TRACING_RESOURCE_ATTRIBUTES             | Sets resource attributes                                      | none          |
-| TRACING_RESOURCE_DETECTORS              | List of resource detectors to use                             | none          |
-| TRACING_RESOURCE_SERVICE_NAME           | Sets the service name for the resource                        | none          |
-| TRACING_RESOURCE_DEPLOYMENT_ENVIRONMENT | Sets the deployment environment for the resource              | none          |
-| TRACING_SECURITY_AUTHORIZATION_HEADER   | Sets the authorization header for security                    | none          |
-| TRACING_SECURITY_INSECURE               | Sets the security mode (insecure or not)                      | true          |
-| TRACING_COMMUNICATION_ENDPOINT          | Sets the endpoint for communication                           | none          |
-| TRACING_COMMUNICATION_EXPORT_METHOD     | Sets the export method for communication (grpc, http, stdout) | grpc          |
+| Variable                                | OTEL Standard Equivalent                | Description                                                   | Default Value |
+|-----------------------------------------|-----------------------------------------|---------------------------------------------------------------|---------------|
+| TRACING_DISABLED                        | OTEL_SDK_DISABLED                       | Disables tracing by setting noop exporter                     | false         |
+| TRACING_PROPAGATION_BAGGAGE             | -                                       | Enables or disables baggage propagation                       | true          |
+| TRACING_PROPAGATION_TRACE_CONTEXT       | -                                       | Enables or disables trace context propagation                 | true          |
+| TRACING_PROPAGATION_B3_MULTIPLE_HEADER  | -                                       | Enables or disables B3 multiple header propagation            | false         |
+| TRACING_PROPAGATION_B3_SINGLE_HEADER    | -                                       | Enables or disables B3 single header propagation              | true          |
+| TRACING_SAMPLING_RATIO                  | OTEL_TRACES_SAMPLER_ARG                 | Sets the sampling ratio for traces                            | 1             |
+| TRACING_RESOURCE_ATTRIBUTES             | OTEL_RESOURCE_ATTRIBUTES                | Sets resource attributes                                      | none          |
+| TRACING_RESOURCE_DETECTORS              | -                                       | List of resource detectors to use                             | none          |
+| TRACING_RESOURCE_SERVICE_NAME           | OTEL_SERVICE_NAME                       | Sets the service name for the resource                        | none          |
+| TRACING_RESOURCE_DEPLOYMENT_ENVIRONMENT | -                                       | Sets the deployment environment for the resource              | none          |
+| TRACING_SECURITY_AUTHORIZATION_HEADER   | -                                       | Sets the authorization header for security                    | none          |
+| TRACING_SECURITY_INSECURE               | -                                       | Sets the security mode (insecure or not)                      | true          |
+| TRACING_COMMUNICATION_ENDPOINT          | OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT | Sets the endpoint for communication                           | none          |
+| TRACING_COMMUNICATION_EXPORT_METHOD     | OTEL_EXPORTER_OTLP_TRACES_PROTOCOL or OTEL_EXPORTER_OTLP_PROTOCOL | Sets the export method for communication (grpc, http, stdout) | grpc          |
+
+The package supports both legacy TRACING_* variables and standard OpenTelemetry OTEL_* variables. When both are set, OTEL_* variables take precedence.
 
 TRACING_RESOURCE_ATTRIBUTES can be extended with other environment variables:
 

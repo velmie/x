@@ -89,6 +89,91 @@ func TestConfigFromEnv(t *testing.T) {
 				err: true,
 			},
 		},
+		{
+			name: "OTEL standard variables fallback",
+			envVars: map[string]string{
+				"OTEL_SDK_DISABLED":           "true",
+				"OTEL_SERVICE_NAME":           "otel-service",
+				"OTEL_RESOURCE_ATTRIBUTES":    "key1=val1,key2=val2",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector:4317",
+				"OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+				"OTEL_TRACES_SAMPLER_ARG":     "0.75",
+			},
+			want: want{
+				cfg: &otelx.Config{
+					Disabled: true,
+					Communication: otelx.CommunicationConfig{
+						Endpoint:     "http://otel-collector:4317",
+						ExportMethod: "grpc",
+					},
+					Security: otelx.SecurityConfig{
+						AuthorizationHeader: "",
+						Insecure:            true,
+					},
+					Resource: otelx.ResourceConfig{
+						ServiceName:           "otel-service",
+						DeploymentEnvironment: "",
+						Attributes: map[string]string{
+							"key1": "val1",
+							"key2": "val2",
+						},
+						Detectors: nil,
+					},
+					Sampling: otelx.SamplingConfig{
+						Ratio: 0.75,
+					},
+					Propagation: otelx.PropagationConfig{
+						Baggage:          true,
+						TraceContext:     true,
+						B3SingleHeader:   true,
+						B3MultipleHeader: false,
+					},
+				},
+				err: false,
+			},
+		},
+		{
+			name: "OTEL variables override legacy variables",
+			envVars: map[string]string{
+				// OTEL variables (should take precedence)
+				"OTEL_SDK_DISABLED":           "true",
+				"OTEL_SERVICE_NAME":           "otel-service",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel:4317",
+				// Legacy variables (should be ignored)
+				"TRACING_DISABLED":               "false",
+				"TRACING_RESOURCE_SERVICE_NAME":  "legacy-service",
+				"TRACING_COMMUNICATION_ENDPOINT": "http://legacy:4567",
+			},
+			want: want{
+				cfg: &otelx.Config{
+					Disabled: true,
+					Communication: otelx.CommunicationConfig{
+						Endpoint:     "http://otel:4317",
+						ExportMethod: "grpc",
+					},
+					Security: otelx.SecurityConfig{
+						AuthorizationHeader: "",
+						Insecure:            true,
+					},
+					Resource: otelx.ResourceConfig{
+						ServiceName:           "otel-service",
+						DeploymentEnvironment: "",
+						Attributes:            nil,
+						Detectors:             nil,
+					},
+					Sampling: otelx.SamplingConfig{
+						Ratio: 1,
+					},
+					Propagation: otelx.PropagationConfig{
+						Baggage:          true,
+						TraceContext:     true,
+						B3SingleHeader:   true,
+						B3MultipleHeader: false,
+					},
+				},
+				err: false,
+			},
+		},
 	}
 
 	for _, tt := range tests {
