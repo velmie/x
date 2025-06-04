@@ -3,6 +3,7 @@ package otelx
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.opentelemetry.io/contrib/propagators/b3"
 	"go.opentelemetry.io/otel/attribute"
@@ -114,9 +115,17 @@ func CreateExporter(ctx context.Context, c *Config) (e sdktrace.SpanExporter, er
 	}
 }
 
+func withoutSchema(endpoint string) string {
+	schemeIndex := strings.Index(endpoint, "://")
+	if schemeIndex != -1 {
+		return endpoint[schemeIndex+3:]
+	}
+	return endpoint
+}
+
 func otlptracehttpOptions(c *Config) (opts []otlptracehttp.Option) {
 	if c.Communication.Endpoint != "" {
-		opts = append(opts, otlptracehttp.WithEndpoint(c.Communication.Endpoint))
+		opts = append(opts, otlptracehttp.WithEndpoint(withoutSchema(c.Communication.Endpoint)))
 	}
 	if c.Security.Insecure {
 		opts = append(opts, otlptracehttp.WithInsecure())
@@ -131,7 +140,7 @@ func otlptracehttpOptions(c *Config) (opts []otlptracehttp.Option) {
 
 func otlptracegrpcOptions(c *Config) (opts []otlptracegrpc.Option) {
 	if c.Communication.Endpoint != "" {
-		opts = append(opts, otlptracegrpc.WithEndpoint(c.Communication.Endpoint))
+		opts = append(opts, otlptracegrpc.WithEndpoint(withoutSchema(c.Communication.Endpoint)))
 	}
 	if c.Security.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
