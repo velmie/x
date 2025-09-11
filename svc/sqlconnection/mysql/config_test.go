@@ -263,6 +263,30 @@ func TestConfigFromEnv(t *testing.T) {
 			},
 			expectsError: false,
 		},
+		{
+			name: "everything is ok: only required vars; host is a local domain name",
+			envs: map[string]string{
+				"DB_HOST":               "mysql-database.mysql.svc.cluster.local",
+				"DB_PORT":               "3306",
+				"DB_NAME":               "db_name",
+				"DB_USER":               "db_user",
+				"DB_PASS":               "db_secret",
+				"DB_UNSAFE_DISABLE_TLS": "true",
+			},
+			expectsError: false,
+		},
+		{
+			name: "everything is ok: only required vars; host is a public domain name",
+			envs: map[string]string{
+				"DB_HOST":               "mysql-test-stage-eks-1-ape1.cli84y4sgsme.ap-east-1.rds.amazonaws.com",
+				"DB_PORT":               "3306",
+				"DB_NAME":               "db_name",
+				"DB_USER":               "db_user",
+				"DB_PASS":               "db_secret",
+				"DB_UNSAFE_DISABLE_TLS": "true",
+			},
+			expectsError: false,
+		},
 	}
 
 	for _, tt := range tests {

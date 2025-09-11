@@ -44,7 +44,7 @@ func ConfigFromEnv(envPrefix string) (*Config, error) {
 	)
 
 	err := envx.Supply(
-		envx.Set(&res.Host, p.Get("DB_HOST").Required().NotEmpty().ValidURL().String),
+		envx.Set(&res.Host, p.Get("DB_HOST").Required().NotEmpty().ValidDomainName().String),
 		envx.Set(&res.Port, p.Get("DB_PORT").Required().NotEmpty().ValidPortNumber().Int),
 		envx.Set(&res.Name, p.Get("DB_NAME").Required().NotEmpty().String),
 		envx.Set(&res.User, p.Get("DB_USER").Required().NotEmpty().String),
