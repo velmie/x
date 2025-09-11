@@ -3,9 +3,9 @@ module github.com/velmie/x/svc/sqlconnection/mysql
 go 1.22.4
 
 require (
-	github.com/go-sql-driver/mysql v1.8.1
-	github.com/stretchr/testify v1.9.0
-	github.com/velmie/x/envx v0.3.0
+	github.com/go-sql-driver/mysql v1.9.3
+	github.com/stretchr/testify v1.11.1
+	github.com/velmie/x/envx v0.9.0
 )
 
 require (
