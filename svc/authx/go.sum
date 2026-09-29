@@ -26,6 +26,8 @@ github.com/stretchr/testify v1.8.2 h1:+h33VjcLVPDHtOdpUCuF+7gSuG3yGIftsP1YvFihtJ
 github.com/stretchr/testify v1.8.2/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/velmie/x/authentication v1.0.0 h1:9WajyLyXfCY3wGAkZgD5Na6r+lfe9TtvMUONuwbBNFE=
 github.com/velmie/x/authentication v1.0.0/go.mod h1:7VKbakLoRED56G1xowG/DG6Fv2KZLTR23wO2jvuYhPc=
+github.com/velmie/x/authentication v1.1.0 h1:pEe8MIZU68c+nN2oWvlBmGSItixjh/SA67Y+got9kTg=
+github.com/velmie/x/authentication v1.1.0/go.mod h1:yFa4f3gff3sAy6QWpr7KwcuQ32BIdhayrNLWokKDIDA=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190911031432-227b76d455e7 h1:0hQKqeLdqlt5iIwVOBErRisrHJAN57yOiPRQItI20fU=
 golang.org/x/crypto v0.0.0-20190911031432-227b76d455e7/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
