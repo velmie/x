@@ -8,27 +8,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// jwtErrMap maps known errors from jwt package to local errors
-var jwtErrMap = map[error]Error{
-	jwt.ErrInvalidKey:                ErrBadToken,
-	jwt.ErrInvalidKeyType:            ErrBadToken,
-	jwt.ErrHashUnavailable:           ErrBadToken,
-	jwt.ErrTokenMalformed:            ErrBadToken,
-	jwt.ErrTokenUnverifiable:         ErrBadToken,
-	jwt.ErrTokenSignatureInvalid:     ErrBadToken,
-	jwt.ErrSignatureInvalid:          ErrBadToken,
-	jwt.ErrTokenRequiredClaimMissing: ErrNotAuthenticated,
-	jwt.ErrTokenInvalidAudience:      ErrNotAuthenticated,
-	jwt.ErrTokenExpired:              ErrNotAuthenticated,
-	jwt.ErrTokenUsedBeforeIssued:     ErrNotAuthenticated,
-	jwt.ErrTokenInvalidIssuer:        ErrNotAuthenticated,
-	jwt.ErrTokenInvalidSubject:       ErrNotAuthenticated,
-	jwt.ErrTokenNotValidYet:          ErrNotAuthenticated,
-	jwt.ErrTokenInvalidId:            ErrNotAuthenticated,
-	jwt.ErrTokenInvalidClaims:        ErrNotAuthenticated,
-	jwt.ErrInvalidType:               ErrBadToken,
-}
-
 // JWTv5Parser is a wrapper around jwt.Parser
 type JWTv5Parser struct {
 	parser *jwt.Parser
@@ -55,7 +34,7 @@ func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySour
 		publicKey, err := keySource.FetchPublicKey(ctx, kid)
 		if err != nil {
 			if errors.Is(err, ErrKeyNotFound) {
-				return nil, fmt.Errorf("key is not found: %w", ErrTokenUnverifiable)
+				return nil, fmt.Errorf("key is not found: %w: %w", ErrTokenUnverifiable, err)
 			}
 			return nil, fmt.Errorf("failed to fetch public key: %w", err)
 		}
@@ -66,10 +45,7 @@ func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySour
 		if errors.Is(err, ErrTokenUnverifiable) {
 			return nil, err
 		}
-		if knownErr, ok := jwtErrMap[errors.Unwrap(err)]; ok {
-			return nil, fmt.Errorf("%w: %v", knownErr, err)
-		}
-		return nil, fmt.Errorf("%w: %v", ErrBadToken, err)
+		return nil, &classifiedTokenError{category: classifyJWTError(err), cause: err}
 	}
 
 	return &JSONWebToken{
@@ -79,4 +55,53 @@ func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySour
 		Signature: parsedToken.Signature,
 		Valid:     parsedToken.Valid,
 	}, nil
+}
+
+// classifyJWTError gives parsing and verification failures priority over claims
+// failures, including when an upstream error contains several causes.
+func classifyJWTError(err error) Error {
+	switch {
+	case errors.Is(err, jwt.ErrInvalidKey),
+		errors.Is(err, jwt.ErrInvalidKeyType),
+		errors.Is(err, jwt.ErrHashUnavailable),
+		errors.Is(err, jwt.ErrTokenMalformed),
+		errors.Is(err, jwt.ErrTokenUnverifiable),
+		errors.Is(err, jwt.ErrTokenSignatureInvalid),
+		errors.Is(err, jwt.ErrSignatureInvalid),
+		errors.Is(err, jwt.ErrInvalidType):
+		return ErrBadToken
+	case errors.Is(err, jwt.ErrTokenRequiredClaimMissing),
+		errors.Is(err, jwt.ErrTokenInvalidAudience),
+		errors.Is(err, jwt.ErrTokenExpired),
+		errors.Is(err, jwt.ErrTokenUsedBeforeIssued),
+		errors.Is(err, jwt.ErrTokenInvalidIssuer),
+		errors.Is(err, jwt.ErrTokenInvalidSubject),
+		errors.Is(err, jwt.ErrTokenNotValidYet),
+		errors.Is(err, jwt.ErrTokenInvalidId),
+		errors.Is(err, jwt.ErrTokenInvalidClaims):
+		return ErrNotAuthenticated
+	default:
+		return ErrBadToken
+	}
+}
+
+// classifiedTokenError preserves the historical single-unwrapping category
+// while exposing the original error to errors.Is and errors.As.
+type classifiedTokenError struct {
+	category Error
+	cause    error
+}
+
+func (e *classifiedTokenError) Error() string {
+	return fmt.Sprintf("%s: %s", e.category, e.cause)
+}
+
+func (e *classifiedTokenError) Unwrap() error { return e.category }
+
+func (e *classifiedTokenError) Is(target error) bool {
+	return errors.Is(e.category, target) || errors.Is(e.cause, target)
+}
+
+func (e *classifiedTokenError) As(target any) bool {
+	return errors.As(e.category, target) || errors.As(e.cause, target)
 }
