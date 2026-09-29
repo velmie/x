@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -103,11 +104,7 @@ func NewJWTMethod(opts ...JWTMethodOption) (*authentication.ViaJWT, error) {
 	if err := validateJWTMethodOptions(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid options: %s", err)
 	}
-	validMethods := jwt.WithValidMethods(defaultJWTSigningMethods)
-	if len(cfg.ValidSigningMethods) > 0 {
-		validMethods = jwt.WithValidMethods(defaultJWTSigningMethods)
-	}
-	parser := jwt.NewParser(validMethods)
+	parser := jwt.NewParser(jwt.WithValidMethods(cfg.ValidSigningMethods))
 	viaJWT := authentication.NewViaJWT(
 		authentication.NewJWTv5Parser(parser),
 		keySource(&cfg, cfg.Log),
@@ -121,9 +118,8 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 	if cfg.JWKSOptions.Enabled {
 		opts := cfg.JWKSOptions
 		retryClient := retryablehttp.NewClient()
-		if log != nil {
-			retryClient.Logger = log
-		}
+		// The source reports bounded diagnostics. Retry logs include raw URLs.
+		retryClient.Logger = nil
 		retryClient.RetryMax = opts.MaxRetries
 
 		jwksOptions := &authentication.JWKSOptions{
@@ -132,7 +128,7 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 		}
 		if log != nil {
 			jwksOptions.WarnFunc = func(msg string) {
-				log.Warn(fmt.Sprintf("JWKS: %s", msg))
+				log.Warn("JWKS refresh", "operation", "refresh_keys", "diagnostic", msg)
 			}
 		}
 		jwksOptions.SetRefreshRateLimit(opts.RequestRateLimit, opts.RequestRateLimitDuration)
@@ -147,6 +143,7 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 				namedKeySource{name: "JWKS", source: source},
 				namedKeySource{name: "given fixed Key", source: givenKeySource},
 				log,
+				false,
 			)
 		} else {
 			source = givenKeySource
@@ -161,29 +158,56 @@ type namedKeySource struct {
 	source authentication.KeySource
 }
 
-func fallbackSource(a, b namedKeySource, log Logger) authentication.KeySource {
+func fallbackSource(a, b namedKeySource, log Logger, confirmedAbsenceOnly bool) authentication.KeySource {
 	return authentication.KeySourceFunc(func(ctx context.Context, kid string) (crypto.PublicKey, error) {
 		key, err := a.source.FetchPublicKey(ctx, kid)
 		if err == nil {
 			return key, nil
 		}
+		// JWKS returns the sentinel itself for a confirmed absent key. A wrapped
+		// ErrKeyNotFound can instead indicate a failed lookup, such as rate limiting.
+		useFallback := !confirmedAbsenceOnly || err == authentication.ErrKeyNotFound
 		if log != nil {
+			message, outcome := "JWT key lookup failed; using fallback", "fallback"
+			if !useFallback {
+				message, outcome = "JWT key lookup failed; fallback rejected", "rejected"
+			}
 			log.Warn(
-				fmt.Sprintf("failed to fetch key using the first key source '%s', fallback to the second key source '%s': %s",
-					a.name,
-					b.name,
-					err,
-				),
+				message,
+				"operation", "fetch_key", "stage", "primary_source",
+				"reason", keySourceFailureReason(err), "outcome", outcome,
+				"source", a.name, "fallback_source", b.name,
 			)
+		}
+		if !useFallback {
+			return nil, err
 		}
 		return b.source.FetchPublicKey(ctx, kid)
 	})
 }
 
+func keySourceFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, authentication.ErrKeySetExpired):
+		return "key_set_expired"
+	case errors.Is(err, authentication.ErrKeyNotFound):
+		if err != authentication.ErrKeyNotFound {
+			return "key_lookup_failed"
+		}
+		return "key_not_found"
+	default:
+		return "key_source_failed"
+	}
+}
+
 func jwksNonBlocking(endpoint string, options *authentication.JWKSOptions, ready chan<- struct{}) authentication.KeySource {
-	var jwksSource *authentication.KeySourceJWKS
+	var jwksSource atomic.Pointer[authentication.KeySourceJWKS]
 	go func() {
-		jwksSource = authentication.NewKeySourceJWKS(endpoint, options)
+		jwksSource.Store(authentication.NewKeySourceJWKS(endpoint, options))
 		if ready != nil {
 			ready <- struct{}{}
 			close(ready)
@@ -191,11 +215,12 @@ func jwksNonBlocking(endpoint string, options *authentication.JWKSOptions, ready
 	}()
 
 	return authentication.KeySourceFunc(func(ctx context.Context, kid string) (crypto.PublicKey, error) {
-		if jwksSource == nil {
+		source := jwksSource.Load()
+		if source == nil {
 			return nil, fmt.Errorf("jwks source is not ready yet")
 		}
 
-		return jwksSource.FetchPublicKey(ctx, kid)
+		return source.FetchPublicKey(ctx, kid)
 	})
 }
 

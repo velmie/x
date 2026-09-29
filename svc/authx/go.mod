@@ -3,7 +3,7 @@ module github.com/velmie/x/svc/authx
 go 1.21.0
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.0.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/hashicorp/go-retryablehttp v0.7.4
 	github.com/velmie/x/authentication v1.0.0
 )
