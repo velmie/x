@@ -1,69 +1,91 @@
 # Bootstrap
-Package helps to automate application services startup and graceful shutdown. Pretty often `main` function is polluted with initialization of graceful shutdown channel, wait groups waiting, goroutine scheduling for each service. In conjunction, it adds a lot of nasty code and, moreover, pretty the same logic a repeated on each application you write. This Package helps to hide most of the logic under the hood.
+
+`bootstrap` starts registered services and coordinates their graceful shutdown.
+Services own their resources and the work needed to stop them.
 
 ## Usage
-Firstly you have to create `Orchestrator` with options applicable for you.
+
+Create an orchestrator and register services before calling `Serve`:
+
 ```go
 orc := bootstrap.NewOrchestrator(
     bootstrap.WithStopSignals(syscall.SIGINT, syscall.SIGTERM),
-    bootstrap.WithLogger(bootstrap.NewDefaultLogger()),
-    bootstrap.WithShutdownTimeout(5 * time.Second),
+    bootstrap.WithShutdownTimeout(5*time.Second),
 )
-```
-There are 3 options available for `Orchestrator` configuration:
-* `bootstrap.WithStopSignals` - allows to specify signals which are considered as stop signals by `Orchestrator`. By default, `syscall.SIGINT`, `syscall.SIGTERM` signals are considered as stop signals;
-* `bootstrap.WithLogger` - allows to set logger. Provided logger must implement `bootstrap.Logger` interface. If not specified, `DefaultLogger` is used for logging. Package also contains `NoopLogger` which shadows any logging message, so no logging output produced;
-* `bootstrap.WithShutdownTimeout` - sets service shutdown timeout (timeout for each service to be stopped). There is no default timeout.
 
-After that services must be registered. First option is to implement `bootstrap.Service` interface like it is done for `http.Server` below:
-```go
-// bootstrap.Service interface looks as follows:
-// type Service interface {
-//     Start() error
-//     Stop(ctx context.Context) error
-// }
+srv := &http.Server{Addr: ":8080", Handler: handler}
+orc.Register(bootstrap.NewServerWrapper(srv))
 
-type HTTPService struct {
-    srv *http.Server
-}
-
-func NewHTTPService() *HTTPService {
-    return &HTTPService{srv: &http.Server{}}
-}
-
-func (s *HTTPService) Start() error {
-    return s.srv.ListenAndServe()
-}
-
-func (s *HTTPService) Stop(ctx context.Context) error {
-    return s.srv.Shutdown(ctx)
-}
-```
-After that it can be registered as follows:
-```go
-orc := bootstrap.NewOrchestrator()
-orc.Register(NewHTTPService())
-```
-Such approach - implementation of `bootstrap.Service` might cause overhead and pollution of code, so there is a possibility to define start and stop functions and register them via `bootstrap.ServiceFunc`:
-```go
-srv := &http.Server{}
-
-startFn := func() error {
-    return srv.ListenAndServe()
-}
-
-stopFn := func(ctx context.Context) error {
-    return srv.Shutdown(ctx)
-}
-
-orc := bootstrap.NewOrchestrator()
-orc.Register(bootstrap.ServiceFunc(startFn, stopFn))
-```
-After that, services can be started as simply as follows:
-```go
 if err := orc.Serve(); err != nil {
-    // handle error
+    // Inspect the startup and shutdown causes with errors.Is or errors.As.
 }
 ```
-`Serve` function calls start function of each service in separate goroutine. Please note, if at least one of the registered services fail to start, stop functions of each service will be called and error returned. `Serve` function is blocking and can be interrupted either via sending stop signal to application process or calling `Stop` function of `Orchestrator`.  
-After sending stop signal to application process, shutdown process starts and stop functions are called for each service with timeout context if configured correspondingly.
+
+The options are:
+
+- `WithStopSignals`: signals that request shutdown. The defaults are `SIGINT`
+  and `SIGTERM`. An empty argument list preserves those defaults.
+- `WithShutdownTimeout`: timeout for each service's `Stop` call. There is no
+  default timeout. Nonpositive values leave the timeout unchanged.
+- `WithLogger`: a logger implementing `bootstrap.Logger`. The default is
+  `NewNoopLogger()`, which produces no output. A supplied logger must support
+  concurrent calls. Failure logs contain stage, reason, outcome, the zero-based
+  registration index in `service_index`, and the original error object in `error`.
+  The supplied logger owns redaction of sensitive application data before output.
+  Preserve useful cause text and the service index when redacting values.
+
+## Service ownership
+
+A service implements:
+
+```go
+type Service interface {
+    Start() error
+    Stop(ctx context.Context) error
+}
+```
+
+`Start` runs in its own goroutine. `Stop` must request termination and wait for
+that service's work to finish. The methods can overlap, including when shutdown
+is requested before startup completes. Services must handle that overlap.
+
+Existing functions can be registered with `ServiceFunc`:
+
+```go
+orc.Register(bootstrap.ServiceFunc(start, stop))
+```
+
+The supplied `stop` function has the same ownership contract. It must stop and
+wait for the work started by `start`, honoring its shutdown context. There is no
+dependency ordering between services. Stops run concurrently, each with its own
+timeout context when configured. A timeout is cooperative: the orchestrator
+cannot force a `Stop` implementation that ignores its context to return.
+
+## Requesting and observing shutdown
+
+`Serve` blocks until a configured signal, a call to `Orchestrator.Stop`, or the
+first observed startup error requests shutdown. It then waits for every
+registered service's `Stop` call to return. Only one `Serve` call may be active
+on an orchestrator. Register services before starting it.
+
+`Orchestrator.Stop()` is an idempotent, nonblocking request. Repeated and
+concurrent calls are safe before, during, and after `Serve`. A request made
+before `Serve` is retained. Wait for `Serve` to return to observe the result of
+shutdown. The orchestrator does not independently wait for arbitrary `Start`
+goroutines after their service's `Stop` has returned.
+
+`Serve` returns the first observed startup error together with all shutdown
+errors. Use `errors.Is` or `errors.As` to inspect their causes. A sole startup
+error is returned unchanged. Shutdown errors identify the service by its
+zero-based registration index. If startup and shutdown succeed, `Serve` returns
+`nil`. With no registered services, it returns `ErrNoRegisteredServices`.
+
+If another `Start` call fails after shutdown has begun, its error and service
+index are still logged. Such failures do not replace the first startup error or
+extend the wait for shutdown. A cancellation or `http.ErrServerClosed` returned
+by `Start` during shutdown is logged at info level with `reason=service_stopped`.
+
+Returning shutdown errors is a change in public behavior: `Serve` can now return
+an error after a successful startup and an explicit stop request or signal.
+Previously these shutdown errors were only logged. Public method signatures and
+interfaces remain unchanged.
