@@ -1,49 +1,67 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 )
 
 const (
-	defaultTLSConfigName = "mysqlTLSConfig"
-
-	defaultConnMaxIdleTime = 10 * time.Minute
-	defaultConnMaxLifetime = 1 * time.Hour
+	defaultConnMaxIdleTime  = 10 * time.Minute
+	defaultConnMaxLifetime  = 1 * time.Hour
+	maxOpenConnsCoefficient = .9
+	maxIdleConnsCoefficient = .1
 )
 
 type Logger interface {
 	Info(msg string, args ...any)
 }
 
-// NewConnection creates new database connection
+// NewConnection opens and initializes a connection pool using context.Background.
+// Use NewConnectionContext to bound initialization with cancellation or a deadline.
 func NewConnection(cfg *Config, log Logger) (*sql.DB, error) {
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?parseTime=true",
-		cfg.User,
-		cfg.Password,
-		cfg.Host,
-		cfg.Port,
-		cfg.Name,
-	)
+	return NewConnectionContext(context.Background(), cfg, log)
+}
 
-	if cfg.TLSConfig != nil {
-		if err := mysql.RegisterTLSConfig(defaultTLSConfigName, cfg.TLSConfig); err != nil {
-			return nil, fmt.Errorf("cannot register mysql tls config: %w", err)
-		}
+// NewConnectionContext opens a pool, checks connectivity, and applies pool
+// settings. Both Ping and the server-settings query use ctx. Failed
+// initialization closes the pool and preserves the original error cause.
+// On success the caller owns the pool and must close it. Later cancellation of
+// ctx does not close the pool. Computed defaults are written back to cfg.
+func NewConnectionContext(ctx context.Context, cfg *Config, log Logger) (*sql.DB, error) {
+	driverConfig := mysql.NewConfig()
+	driverConfig.User = cfg.User
+	driverConfig.Passwd = cfg.Password
+	driverConfig.DBName = cfg.Name
+	driverConfig.Net = "tcp"
+	driverConfig.Addr = net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	driverConfig.ParseTime = true
+	driverConfig.TLS = cfg.TLSConfig
 
-		dsn += "&tls=" + defaultTLSConfigName
-	}
-
-	db, err := sql.Open("mysql", dsn)
+	connector, err := mysql.NewConnector(driverConfig)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open mysql connection: %w", err)
 	}
 
-	err = db.Ping()
+	return initializeConnection(ctx, sql.OpenDB(connector), cfg, log)
+}
+
+func initializeConnection(ctx context.Context, db *sql.DB, cfg *Config, log Logger) (_ *sql.DB, err error) {
+	defer func() {
+		if err != nil {
+			if closeErr := db.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("cannot close mysql connection: %w", closeErr))
+			}
+		}
+	}()
+
+	err = db.PingContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mysql connection is not established: %w", err)
 	}
@@ -58,15 +76,10 @@ func NewConnection(cfg *Config, log Logger) (*sql.DB, error) {
 			maxConn int
 			name    string
 		)
-		err = db.QueryRow("SHOW VARIABLES LIKE 'max_connections'").Scan(&name, &maxConn)
+		err = db.QueryRowContext(ctx, "SHOW VARIABLES LIKE 'max_connections'").Scan(&name, &maxConn)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get maximum number of connections: %w", err)
 		}
-
-		const (
-			maxOpenConnsCoefficient = .9
-			maxIdleConnsCoefficient = .1
-		)
 
 		if cfg.MaxIdleConnections == 0 {
 			maxIdleConn := int(float64(maxConn) * maxIdleConnsCoefficient)
