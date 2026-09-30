@@ -3,6 +3,7 @@ package sqltx_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -60,6 +61,79 @@ func TestWithTransaction_Panic(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "panic recovered")
+	require.Contains(t, err.Error(), "test panic")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWithTransaction_ErrorPhase(t *testing.T) {
+	for _, stage := range []string{"begin", "commit", "callback", "nested callback"} {
+		t.Run(stage, func(t *testing.T) {
+			db, mock := testDBWithMock(t)
+			var wrapper Wrapper = NewDefaultWrapper(db, &noopLogger{})
+			cause := &databaseError{message: "database operation failed"}
+			if stage == "begin" {
+				mock.ExpectBegin().WillReturnError(cause)
+			} else {
+				mock.ExpectBegin()
+				if stage == "commit" {
+					mock.ExpectCommit().WillReturnError(cause)
+				} else {
+					mock.ExpectRollback()
+				}
+			}
+
+			called := false
+			err := wrapper.WithTransaction(context.Background(), func(ctx context.Context) error {
+				called = true
+				switch stage {
+				case "callback":
+					return cause
+				case "nested callback":
+					return wrapper.WithTransaction(ctx, func(nested context.Context) error {
+						require.Same(t, wrapper.Connection(ctx), wrapper.Connection(nested))
+						return cause
+					})
+				default:
+					return nil
+				}
+			})
+
+			require.Equal(t, stage != "begin", called)
+			require.ErrorIs(t, err, cause)
+			var typed *databaseError
+			require.ErrorAs(t, err, &typed)
+			require.Same(t, cause, typed)
+			switch stage {
+			case "begin":
+				require.ErrorIs(t, err, ErrBegin)
+				require.NotErrorIs(t, err, ErrCommit)
+				require.Same(t, cause, errors.Unwrap(err))
+			case "commit":
+				require.ErrorIs(t, err, ErrCommit)
+				require.NotErrorIs(t, err, ErrBegin)
+				require.Same(t, cause, errors.Unwrap(err))
+			default:
+				require.Same(t, cause, err)
+				require.NotErrorIs(t, err, ErrBegin)
+				require.NotErrorIs(t, err, ErrCommit)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestWithTransaction_CanceledBeforeBegin(t *testing.T) {
+	db, mock := testDBWithMock(t)
+	wrapper := NewDefaultWrapper(db, &noopLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := wrapper.WithTransaction(ctx, func(context.Context) error {
+		t.Fatal("callback must not run after BeginTx fails")
+		return nil
+	})
+	require.ErrorIs(t, err, ErrBegin)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrCommit)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -80,3 +154,7 @@ type noopLogger struct{}
 func (noopLogger) Warn(_ string, _ ...any) {
 	return // do nothing
 }
+
+type databaseError struct{ message string }
+
+func (e *databaseError) Error() string { return e.message }
