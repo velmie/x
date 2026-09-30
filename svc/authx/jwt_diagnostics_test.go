@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ func TestJWKSDiagnosticsExcludeEndpointAndResponseData(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint.User = url.UserPassword("user-secret-marker", "password-secret-marker")
-	logger := &diagnosticLogger{warnings: make(chan struct{}, 8)}
+	logger := &diagnosticLogger{warnings: make(chan struct{}, 8), redact: []string{endpoint.String(), endpoint.Redacted()}}
 	ready := make(chan struct{})
 	key, err := parseECDSAPublicKeyFromPrivateKey(ecdsaPrivateKey)
 	if err != nil {
@@ -68,12 +69,25 @@ func TestJWKSDiagnosticsExcludeEndpointAndResponseData(t *testing.T) {
 type diagnosticLogger struct {
 	mu       sync.Mutex
 	entries  []string
+	records  []map[string]any
+	redact   []string
 	warnings chan struct{}
 }
 
 func (l *diagnosticLogger) record(level, message string, fields ...any) {
 	l.mu.Lock()
-	l.entries = append(l.entries, fmt.Sprint(level, " ", message, " ", fields))
+	record := make(map[string]any)
+	for i := 0; i+1 < len(fields); i += 2 {
+		if key, ok := fields[i].(string); ok {
+			record[key] = fields[i+1]
+		}
+	}
+	l.records = append(l.records, record)
+	text := fmt.Sprint(level, " ", message, " ", fields)
+	for _, value := range l.redact {
+		text = strings.ReplaceAll(text, value, "[redacted]")
+	}
+	l.entries = append(l.entries, strconv.Quote(text))
 	l.mu.Unlock()
 	if level == "warn" {
 		select {

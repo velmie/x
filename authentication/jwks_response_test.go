@@ -160,7 +160,7 @@ func TestJWKSResponseSizeLimit(t *testing.T) {
 func TestJWKSRefreshWarningsAreSafeAndOncePerFailure(t *testing.T) {
 	warnings := make(chan string, 4)
 	source := NewKeySourceJWKS("https://user:secret@example.test/keys?secret=value", &JWKSOptions{RefreshInterval: time.Hour, WarnFunc: func(message string) { warnings <- message }, Client: concurrencyClient(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 503, Body: responseFailureBody{err: errors.New("secret"), closeErr: errors.New("secret-close")}}, nil
+		return &http.Response{StatusCode: 503, Body: responseFailureBody{err: errors.New("secret"), closeErr: context.Canceled}}, nil
 	})})
 	defer source.Stop()
 	select {

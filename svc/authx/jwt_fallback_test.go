@@ -20,7 +20,7 @@ func TestManagedJWTMethodFallbackRequiresConfirmedAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dependency := errors.New("dependency-secret-marker\ninjected-log-marker")
+	dependency := errors.New("dependency unavailable credential=dependency-secret-marker\ninjected-log-marker")
 	for _, tc := range []struct {
 		name    string
 		failure error
@@ -50,7 +50,7 @@ func TestManagedJWTMethodFallbackRequiresConfirmedAbsence(t *testing.T) {
 			}
 			lifetime, stop := context.WithCancel(context.Background())
 			defer stop()
-			logger := &diagnosticLogger{warnings: make(chan struct{}, 8)}
+			logger := &diagnosticLogger{warnings: make(chan struct{}, 8), redact: []string{"dependency-secret-marker\ninjected-log-marker"}}
 			method, err := authx.NewManagedJWTMethod(lifetime, authx.ManagedJWTMethodOptions{
 				Endpoint:          "https://issuer.example/jwks",
 				JWKSOptions:       sourceOptions,
@@ -72,8 +72,12 @@ func TestManagedJWTMethodFallbackRequiresConfirmedAbsence(t *testing.T) {
 				if tc.failure != nil && !errors.Is(err, tc.failure) {
 					t.Fatalf("dependency cause lost: %v", err)
 				}
-				if tc.limited && !errors.Is(err, authentication.ErrKeyNotFound) {
-					t.Fatalf("legacy rate-limit category lost: %v", err)
+				if tc.limited {
+					var diagnostic *authentication.JWKSError
+					if !errors.Is(err, authentication.ErrKeyNotFound) || !errors.Is(err, authentication.ErrJWKSRateLimited) ||
+						errors.Unwrap(err) != authx.ErrNotAuthenticated || !errors.As(err, &diagnostic) || diagnostic.Reason() != "rate_limit" {
+						t.Fatalf("adapter lost rate-limit category or diagnostic: %v", err)
+					}
 				}
 			}
 			logger.mu.Lock()
@@ -84,6 +88,24 @@ func TestManagedJWTMethodFallbackRequiresConfirmedAbsence(t *testing.T) {
 			}
 			if !tc.allow && !strings.Contains(logs, "rejected") {
 				t.Fatalf("rejected fallback not diagnosed: %s", logs)
+			}
+			if tc.failure != nil {
+				logger.mu.Lock()
+				defer logger.mu.Unlock()
+				var found bool
+				for _, record := range logger.records {
+					if record["operation"] != "fetch_key" {
+						continue
+					}
+					found = true
+					cause, ok := record["error"].(error)
+					if !ok || !errors.Is(cause, tc.failure) || record["source"] != "JWKS" {
+						t.Fatalf("fallback lost cause or source: %v", record)
+					}
+				}
+				if !found || !strings.Contains(logs, "dependency unavailable") {
+					t.Fatalf("fallback failure detail absent: %s", logs)
+				}
 			}
 		})
 	}

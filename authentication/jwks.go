@@ -12,14 +12,9 @@ import (
 	"net/url"
 	"sync"
 	"time"
-
-	"github.com/go-jose/go-jose/v3"
 )
 
-const (
-	errRateLimitExceeded       = Error("rate limit exceeded")
-	maxInt64             int64 = 1<<63 - 1
-)
+const maxInt64 int64 = 1<<63 - 1
 
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -36,14 +31,20 @@ type KeySourceJWKS struct {
 	refreshInterval        time.Duration
 	requestOnUnknownKID    bool
 	url                    string
-	keys                   map[string]crypto.PublicKey
+	snapshot               *jwksSnapshot
+	verificationPolicy     *JWKSVerificationPolicy
+	policyErr              error
 	warnFunc               func(string)
+	diagnosticFunc         func(*JWKSError)
 	mu                     sync.RWMutex
 	rl                     *rateLimiter
 	started                bool
 	managed                bool
 	starting               bool
 	stopped                bool
+	closed                 bool
+	activeWork             int
+	shutdownDone           chan struct{}
 	lifetime               context.Context
 	refreshMu              sync.Mutex
 	flight                 *keyRefresh
@@ -53,6 +54,9 @@ type KeySourceJWKS struct {
 // JWKSOptions holds options for JWKS key source
 type JWKSOptions struct {
 	Client HTTPClient
+	// VerificationPolicy opts into public JWT verification keys. Nil preserves
+	// legacy acceptance. Construction copies the policy and its algorithms.
+	VerificationPolicy *JWKSVerificationPolicy
 	// MaxResponseBytes limits a successful response body. Zero leaves it unlimited.
 	MaxResponseBytes int64
 	// MaxCacheAge rejects snapshots at or beyond this age. Zero leaves age unlimited.
@@ -61,10 +65,16 @@ type JWKSOptions struct {
 	ReserveRefreshCapacity bool
 	RefreshInterval        time.Duration
 	RequestOnUnknownKID    bool
-	WarnFunc               func(string)
-	limit                  int
-	duration               time.Duration
-	rateLimitSet           bool
+	// WarnFunc receives safe diagnostic text when DiagnosticFunc is unset.
+	WarnFunc func(string)
+	// DiagnosticFunc receives structured refresh failures and warnings. It takes
+	// precedence over WarnFunc. Callbacks may run concurrently, execute outside
+	// source locks, and are awaited by Shutdown. They may call Stop, but must not
+	// call Shutdown, which would wait for the callback itself.
+	DiagnosticFunc func(*JWKSError)
+	limit          int
+	duration       time.Duration
+	rateLimitSet   bool
 }
 
 // SetRefreshRateLimit sets rate limit for key requests
@@ -81,9 +91,7 @@ func NewKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
 	source.cancel = cancel
 	if source.refreshInterval < 0 {
 		source.refreshInterval = time.Minute
-		if source.warnFunc != nil {
-			source.warnFunc("operation=jwks_config stage=validate reason=negative_refresh_interval outcome=defaulted")
-		}
+		source.reportDiagnostic(&JWKSError{operation: "jwks_config", stage: "validate", reason: "negative_refresh_interval", field: "RefreshInterval", outcome: "defaulted"})
 	}
 	source.startRefreshingKeys(ctx)
 	return source
@@ -94,28 +102,31 @@ func NewKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
 func NewManagedKeySourceJWKS(jwksURL string, options ...*JWKSOptions) (*KeySourceJWKS, error) {
 	endpoint, err := url.Parse(jwksURL)
 	if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" {
-		return nil, &jwksResponseError{stage: "config", reason: "invalid_endpoint"}
+		return nil, &JWKSError{stage: "config", reason: "invalid_endpoint", field: "endpoint", cause: err}
 	}
 	if len(options) > 0 {
 		o := options[0]
 		if o.RefreshInterval < 0 {
-			return nil, &jwksResponseError{stage: "config", reason: "negative_refresh_interval"}
+			return nil, &JWKSError{stage: "config", reason: "negative_refresh_interval", field: "RefreshInterval"}
 		}
 		if o.MaxCacheAge < 0 {
-			return nil, &jwksResponseError{stage: "config", reason: "negative_cache_age"}
+			return nil, &JWKSError{stage: "config", reason: "negative_cache_age", field: "MaxCacheAge"}
 		}
 		if o.ReserveRefreshCapacity && (o.limit <= 0 || o.duration <= 0) {
-			return nil, &jwksResponseError{stage: "config", reason: "missing_refresh_rate_limit"}
+			return nil, &JWKSError{stage: "config", reason: "missing_refresh_rate_limit", field: "ReserveRefreshCapacity"}
 		}
 		if o.MaxResponseBytes < 0 {
-			return nil, &jwksResponseError{stage: "config", reason: "negative_response_limit"}
+			return nil, &JWKSError{stage: "config", reason: "negative_response_limit", field: "MaxResponseBytes"}
 		}
 		if (o.rateLimitSet || o.limit != 0 || o.duration != 0) && (o.limit <= 0 || o.duration <= 0) {
-			return nil, &jwksResponseError{stage: "config", reason: "invalid_rate_limit"}
+			return nil, &JWKSError{stage: "config", reason: "invalid_rate_limit", field: "SetRefreshRateLimit"}
 		}
 	}
 	source := newKeySourceJWKS(jwksURL, options...)
 	source.managed = true
+	if source.policyErr != nil {
+		return nil, source.policyErr
+	}
 	return source, nil
 }
 
@@ -126,6 +137,10 @@ func NewManagedKeySourceJWKS(jwksURL string, options ...*JWKSOptions) (*KeySourc
 // in their constructor, so Start leaves their lifetime unchanged.
 func (k *KeySourceJWKS) Start(ctx context.Context) error {
 	k.refreshMu.Lock()
+	if k.closed {
+		k.refreshMu.Unlock()
+		return ErrKeySourceStopped
+	}
 	if !k.managed {
 		k.refreshMu.Unlock()
 		return nil
@@ -150,7 +165,9 @@ func (k *KeySourceJWKS) Start(ctx context.Context) error {
 	k.lifetime = lifetime
 	k.cancel = cancel
 	k.starting = true
+	k.activeWork++
 	k.refreshMu.Unlock()
+	defer k.finishWork()
 	err := k.requestKeys(lifetime)
 	k.refreshMu.Lock()
 	k.starting = false
@@ -167,6 +184,7 @@ func (k *KeySourceJWKS) Start(ctx context.Context) error {
 		return err
 	}
 	k.started = true
+	k.activeWork++
 	k.refreshMu.Unlock()
 	go k.refreshLoop(lifetime)
 	return nil
@@ -174,6 +192,59 @@ func (k *KeySourceJWKS) Start(ctx context.Context) error {
 
 // FetchPublicKey fetches the public key with the specified kid
 func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.PublicKey, error) {
+	return k.fetchPublicKey(ctx, kid, "")
+}
+
+// FetchPublicKeyForAlgorithm also enforces the selected key's algorithm when a
+// verification policy is enabled. JWTv5Parser uses this optional capability;
+// custom parsers should call it when checking tokens against that policy.
+func (k *KeySourceJWKS) FetchPublicKeyForAlgorithm(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
+	if k.verificationPolicy != nil && algorithm == "" {
+		return nil, rejectedJWK("lookup", "missing_algorithm", "header.alg", nil)
+	}
+	return k.fetchPublicKey(ctx, kid, algorithm)
+}
+
+// Stop stops background refresh and cancels the current shared request.
+// For managed sources Stop is terminal. Legacy sources retain cached reads
+// and allow later requests for unknown keys.
+func (k *KeySourceJWKS) Stop() {
+	k.refreshMu.Lock()
+	k.stopLocked()
+	k.refreshMu.Unlock()
+}
+
+// Shutdown permanently closes the source and waits for its startup, refreshes,
+// response cleanup, and diagnostic callbacks. It does not close the shared HTTP
+// client or wait for external authentication handlers. The caller owns ctx's
+// deadline; a context error means work may still be finishing. Subsequent calls
+// can continue waiting. Call Shutdown outside diagnostic callbacks; callbacks
+// may use the nonblocking Stop instead.
+func (k *KeySourceJWKS) Shutdown(ctx context.Context) error {
+	k.refreshMu.Lock()
+	if !k.closed {
+		k.closed = true
+		k.stopLocked()
+		if k.activeWork == 0 {
+			close(k.shutdownDone)
+		}
+	}
+	done := k.shutdownDone
+	k.refreshMu.Unlock()
+	select {
+	case <-done:
+		return nil
+	default:
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (k *KeySourceJWKS) fetchPublicKey(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
 	select {
 	default:
 	case <-ctx.Done():
@@ -182,7 +253,7 @@ func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.
 	if err := k.lifecycleError(); err != nil {
 		return nil, err
 	}
-	key, found, err := k.cachedKey(kid)
+	key, found, err := k.cachedKey(kid, algorithm)
 	if err != nil || found {
 		return key, err
 	}
@@ -195,15 +266,15 @@ func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.
 		if lifecycleErr := k.lifecycleError(); lifecycleErr != nil {
 			return nil, errors.Join(lifecycleErr, err)
 		}
-		if errors.Is(err, errRateLimitExceeded) {
-			return nil, fmt.Errorf("%w: operation=jwks_refresh stage=limit reason=rate_limit outcome=failed", ErrKeyNotFound)
+		if errors.Is(err, ErrJWKSRateLimited) {
+			return nil, &classifiedError{category: ErrKeyNotFound, cause: err}
 		}
 		return nil, fmt.Errorf("failed to request keys: %w", err)
 	}
 	if err := k.lifecycleError(); err != nil {
 		return nil, err
 	}
-	key, found, err = k.cachedKey(kid)
+	key, found, err = k.cachedKey(kid, algorithm)
 	if err != nil || found {
 		return key, err
 	}
@@ -211,11 +282,7 @@ func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.
 	return nil, ErrKeyNotFound
 }
 
-// Stop stops background refresh and cancels the current shared request.
-// For managed sources Stop is terminal. Legacy sources retain cached reads
-// and allow later requests for unknown keys.
-func (k *KeySourceJWKS) Stop() {
-	k.refreshMu.Lock()
+func (k *KeySourceJWKS) stopLocked() {
 	if k.managed {
 		k.stopped = true
 	}
@@ -226,24 +293,37 @@ func (k *KeySourceJWKS) Stop() {
 		k.flight.abandoned = true
 		k.flight.cancel()
 	}
-	k.refreshMu.Unlock()
 }
 
 func newKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
-	source := &KeySourceJWKS{client: http.DefaultClient, refreshInterval: time.Minute, url: jwksURL, keys: make(map[string]crypto.PublicKey), rl: new(rateLimiter), now: time.Now}
+	source := &KeySourceJWKS{client: http.DefaultClient, refreshInterval: time.Minute, url: jwksURL, snapshot: &jwksSnapshot{keys: make(map[string]crypto.PublicKey)}, rl: new(rateLimiter), now: time.Now, shutdownDone: make(chan struct{})}
 	if len(options) > 0 {
 		options[0].apply(source)
 	}
 	return source
 }
 
-func (k *KeySourceJWKS) cachedKey(kid string) (crypto.PublicKey, bool, error) {
+func (k *KeySourceJWKS) cachedKey(kid, algorithm string) (crypto.PublicKey, bool, error) {
+	if k.policyErr != nil {
+		return nil, false, k.policyErr
+	}
 	k.mu.RLock()
 	defer k.mu.RUnlock()
 	if k.maxCacheAge > 0 && (k.lastSuccess.IsZero() || k.now().Sub(k.lastSuccess) >= k.maxCacheAge) {
 		return nil, false, fmt.Errorf("%w: operation=jwks_cache stage=validate reason=key_set_expired outcome=rejected", ErrKeySetExpired)
 	}
-	key, found := k.keys[kid]
+	if k.verificationPolicy != nil && k.lastSuccess.IsZero() {
+		return nil, false, rejectedJWK("lookup", "key_set_unavailable", "keys", nil)
+	}
+	key, found := k.snapshot.keys[kid]
+	if found && algorithm != "" && k.verificationPolicy != nil && k.snapshot.algorithms[kid] != algorithm {
+		return nil, false, rejectedJWK("lookup", "algorithm_mismatch", "header.alg", nil)
+	}
+	if !found {
+		if _, rejected := k.snapshot.rejected[kid]; rejected {
+			return nil, false, rejectedJWK("lookup", "key_not_for_verification", "header.kid", nil)
+		}
+	}
 	return key, found, nil
 }
 
@@ -254,6 +334,9 @@ func (k *KeySourceJWKS) lifecycleError() error {
 }
 
 func (k *KeySourceJWKS) lifecycleErrorLocked(requireStarted bool) error {
+	if k.closed {
+		return ErrKeySourceStopped
+	}
 	if !k.managed {
 		return nil
 	}
@@ -271,6 +354,10 @@ func (k *KeySourceJWKS) lifecycleErrorLocked(requireStarted bool) error {
 
 // apply applies options to key source
 func (o *JWKSOptions) apply(source *KeySourceJWKS) {
+	if o.VerificationPolicy != nil {
+		source.verificationPolicy = &JWKSVerificationPolicy{AllowedAlgorithms: append([]string(nil), o.VerificationPolicy.AllowedAlgorithms...)}
+		source.policyErr = source.verificationPolicy.validate()
+	}
 	if o.MaxCacheAge > 0 {
 		source.maxCacheAge = o.MaxCacheAge
 	}
@@ -290,6 +377,7 @@ func (o *JWKSOptions) apply(source *KeySourceJWKS) {
 	if o.WarnFunc != nil {
 		source.warnFunc = o.WarnFunc
 	}
+	source.diagnosticFunc = o.DiagnosticFunc
 	if o.limit > 0 && o.duration > 0 {
 		source.rl.limit = o.limit
 		source.rl.duration = o.duration
@@ -303,6 +391,14 @@ func (k *KeySourceJWKS) requestKeys(ctx context.Context) error {
 }
 
 func (k *KeySourceJWKS) requestKeysFor(ctx context.Context, kid string, missingOnly bool) error {
+	k.refreshMu.Lock()
+	if err := k.lifecycleErrorLocked(false); err != nil {
+		k.refreshMu.Unlock()
+		return err
+	}
+	k.activeWork++
+	k.refreshMu.Unlock()
+	defer k.finishWork()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -317,7 +413,7 @@ func (k *KeySourceJWKS) requestKeysFor(ctx context.Context, kid string, missingO
 			return err
 		}
 		if missingOnly {
-			_, found, err := k.cachedKey(kid)
+			_, found, err := k.cachedKey(kid, "")
 			if found || err != nil {
 				k.refreshMu.Unlock()
 				return err
@@ -339,14 +435,14 @@ func (k *KeySourceJWKS) requestKeysFor(ctx context.Context, kid string, missingO
 			// capacity from a concurrent scheduled refresh.
 			if err := k.rl.reserve(k.now(), k.reserveRefreshCapacity && missingOnly); err != nil {
 				k.refreshMu.Unlock()
-				if k.warnFunc != nil {
-					k.warnFunc("operation=jwks_refresh stage=limit reason=rate_limit outcome=failed")
-				}
-				return err
+				diagnostic := &JWKSError{stage: "limit", reason: "rate_limit", cause: err}
+				k.reportDiagnostic(diagnostic)
+				return diagnostic
 			}
 			requestCtx, cancel := context.WithCancel(refreshValues{ctx})
 			flight = &keyRefresh{done: make(chan struct{}), cancel: cancel}
 			k.flight = flight
+			k.activeWork++
 			// One goroutine per shared load lets every waiter honor its own context.
 			go k.refreshKeys(requestCtx, flight)
 		}
@@ -374,13 +470,14 @@ func (k *KeySourceJWKS) requestKeysFor(ctx context.Context, kid string, missingO
 }
 
 func (k *KeySourceJWKS) refreshKeys(ctx context.Context, flight *keyRefresh) {
+	defer k.finishWork()
 	keys, warning, err := k.loadKeys(ctx)
 	if err == nil {
 		err = ctx.Err()
 	}
 	if err == nil {
 		k.mu.Lock()
-		k.keys = keys
+		k.snapshot = keys
 		k.lastSuccess = k.now()
 		k.mu.Unlock()
 	}
@@ -391,34 +488,45 @@ func (k *KeySourceJWKS) refreshKeys(ctx context.Context, flight *keyRefresh) {
 	close(flight.done)
 	k.refreshMu.Unlock()
 	// Callbacks may reenter FetchPublicKey or Stop. Complete the flight first.
-	if k.warnFunc != nil {
-		if flight.err != nil {
-			if !errors.Is(flight.err, context.Canceled) {
-				k.warnFunc(flight.err.Error())
-			}
-		} else if warning != "" {
-			k.warnFunc(warning)
-		}
+	var diagnostic *JWKSError
+	// Only cancellation of the primary operation suppresses its diagnostic.
+	// A secondary close failure may itself match context.Canceled.
+	if errors.As(flight.err, &diagnostic) && !errors.Is(diagnostic.cause, context.Canceled) {
+		k.reportDiagnostic(diagnostic)
+	} else if warning != nil {
+		k.reportDiagnostic(warning)
 	}
-
 }
 
-func (k *KeySourceJWKS) loadKeys(ctx context.Context) (keys map[string]crypto.PublicKey, warning string, err error) {
+func (k *KeySourceJWKS) loadKeys(ctx context.Context) (keys *jwksSnapshot, warning *JWKSError, err error) {
+	if k.policyErr != nil {
+		return nil, nil, k.policyErr
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, http.NoBody)
 	if err != nil {
-		return nil, "", &jwksResponseError{stage: "request", reason: "request_invalid", cause: err}
+		return nil, nil, &JWKSError{stage: "request", reason: "request_invalid", field: "endpoint", cause: err}
 	}
 	response, err := k.client.Do(req)
 	if err != nil {
-		return nil, "", &jwksResponseError{stage: "request", reason: "request_failed", cause: err}
+		return nil, nil, &JWKSError{stage: "request", reason: "request_failed", cause: err}
 	}
 	defer func() {
 		if closeErr := response.Body.Close(); closeErr != nil {
-			warning = "operation=jwks_refresh stage=close reason=body_close_failed outcome=warning"
+			warning = &JWKSError{stage: "close", reason: "body_close_failed", outcome: "warning", cause: closeErr}
+			if err != nil {
+				// All load errors are JWKSError values. Copy before attaching the
+				// secondary cause so the primary diagnostic retains precedence.
+				var primary *JWKSError
+				if errors.As(err, &primary) {
+					combined := *primary
+					combined.closeCause = closeErr
+					err = &combined
+				}
+			}
 		}
 	}()
 	if response.StatusCode != http.StatusOK {
-		return nil, "", &jwksResponseError{stage: "response", reason: "http_status", status: response.StatusCode}
+		return nil, nil, &JWKSError{stage: "response", reason: "http_status", status: response.StatusCode}
 	}
 	var reader io.Reader = response.Body
 	if k.maxResponseBytes > 0 {
@@ -430,38 +538,33 @@ func (k *KeySourceJWKS) loadKeys(ctx context.Context) (keys map[string]crypto.Pu
 	}
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, "", &jwksResponseError{stage: "read", reason: "body_read_failed", cause: err}
+		return nil, nil, &JWKSError{stage: "read", reason: "body_read_failed", cause: err}
 	}
 	if k.maxResponseBytes > 0 && int64(len(body)) > k.maxResponseBytes {
-		return nil, "", &jwksResponseError{stage: "read", reason: "response_too_large"}
+		return nil, nil, &JWKSError{stage: "read", reason: "response_too_large"}
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		var syntaxError *json.SyntaxError
 		if errors.As(err, &syntaxError) {
-			return nil, "", &jwksResponseError{stage: "decode", reason: "invalid_json", cause: err}
+			return nil, nil, &JWKSError{stage: "decode", reason: "invalid_json", cause: err}
 		}
-		return nil, "", &jwksResponseError{stage: "validate", reason: "invalid_envelope", cause: err}
+		return nil, nil, &JWKSError{stage: "validate", reason: "invalid_envelope", cause: err}
 	}
 	rawKeys := bytes.TrimSpace(envelope["keys"])
 	if len(rawKeys) == 0 || rawKeys[0] != '[' {
-		return nil, "", &jwksResponseError{stage: "validate", reason: "invalid_envelope"}
+		return nil, nil, &JWKSError{stage: "validate", reason: "invalid_envelope", field: "keys"}
 	}
-	jwks := new(jose.JSONWebKeySet)
-	if err := json.Unmarshal(rawKeys, &jwks.Keys); err != nil {
-		return nil, "", &jwksResponseError{stage: "decode", reason: "invalid_keys", cause: err}
-	}
+	keys, err = decodeJWKSSnapshot(rawKeys, k.verificationPolicy)
+	return keys, nil, err
+}
 
-	type publicDeriver interface{ Public() crypto.PublicKey }
-	keys = make(map[string]crypto.PublicKey, len(jwks.Keys))
-	for _, key := range jwks.Keys {
-		kk := key.Key
-		if deriver, ok := kk.(publicDeriver); ok {
-			kk = deriver.Public()
-		}
-		keys[key.KeyID] = kk
+func (k *KeySourceJWKS) reportDiagnostic(diagnostic *JWKSError) {
+	if k.diagnosticFunc != nil {
+		k.diagnosticFunc(diagnostic)
+	} else if k.warnFunc != nil {
+		k.warnFunc(diagnostic.Error())
 	}
-	return keys, "", nil
 }
 
 // keyRefresh publishes err by closing done. It is never reused.
@@ -485,10 +588,18 @@ func (refreshValues) Err() error                  { return nil }
 func (k *KeySourceJWKS) startRefreshingKeys(ctx context.Context) {
 	k.started = true
 	_ = k.requestKeys(ctx)
+	k.refreshMu.Lock()
+	if k.closed {
+		k.refreshMu.Unlock()
+		return
+	}
+	k.activeWork++
+	k.refreshMu.Unlock()
 	go k.refreshLoop(ctx)
 }
 
 func (k *KeySourceJWKS) refreshLoop(ctx context.Context) {
+	defer k.finishWork()
 	if k.managed {
 		defer k.Stop()
 	}
@@ -503,6 +614,17 @@ func (k *KeySourceJWKS) refreshLoop(ctx context.Context) {
 			timer.Reset(k.refreshInterval)
 		}
 	}
+}
+
+// Work is admitted under refreshMu before starting a goroutine or releasing
+// the lock. Closing admission before waiting prevents late work after Shutdown.
+func (k *KeySourceJWKS) finishWork() {
+	k.refreshMu.Lock()
+	k.activeWork--
+	if k.closed && k.activeWork == 0 {
+		close(k.shutdownDone)
+	}
+	k.refreshMu.Unlock()
 }
 
 // rateLimiter reserves a bounded number of refresh requests per time window.
@@ -531,26 +653,8 @@ func (r *rateLimiter) reserve(now time.Time, reserveFinalSlot bool) error {
 		limit--
 	}
 	if r.requests >= limit {
-		return errRateLimitExceeded
+		return ErrJWKSRateLimited
 	}
 	r.requests++
 	return nil
 }
-
-// jwksResponseError exposes a bounded diagnostic while retaining the cause
-// for programmatic inspection. Its cause must not be logged without redaction.
-type jwksResponseError struct {
-	stage  string
-	reason string
-	status int
-	cause  error
-}
-
-func (e *jwksResponseError) Error() string {
-	message := "operation=jwks_refresh stage=" + e.stage + " reason=" + e.reason + " outcome=failed"
-	if e.status != 0 {
-		message += fmt.Sprintf(" status=%d", e.status)
-	}
-	return message
-}
-func (e *jwksResponseError) Unwrap() error { return e.cause }

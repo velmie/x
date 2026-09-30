@@ -203,7 +203,7 @@ func TestRateLimiterReservesSharedBudget(t *testing.T) {
 	if err := limiter.reserve(now, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := limiter.reserve(now, false); !errors.Is(err, errRateLimitExceeded) {
+	if err := limiter.reserve(now, false); !errors.Is(err, ErrJWKSRateLimited) {
 		t.Fatal(err)
 	}
 }
