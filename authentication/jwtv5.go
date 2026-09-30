@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 
@@ -31,7 +32,15 @@ func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySour
 				)
 			}
 		}
-		publicKey, err := keySource.FetchPublicKey(ctx, kid)
+		var publicKey any
+		var err error
+		if source, ok := keySource.(interface {
+			FetchPublicKeyForAlgorithm(context.Context, string, string) (crypto.PublicKey, error)
+		}); ok {
+			publicKey, err = source.FetchPublicKeyForAlgorithm(ctx, kid, token.Method.Alg())
+		} else {
+			publicKey, err = keySource.FetchPublicKey(ctx, kid)
+		}
 		if err != nil {
 			if errors.Is(err, ErrKeyNotFound) {
 				return nil, fmt.Errorf("key is not found: %w: %w", ErrTokenUnverifiable, err)
@@ -45,7 +54,7 @@ func (p *JWTv5Parser) Parse(ctx context.Context, token string, keySource KeySour
 		if errors.Is(err, ErrTokenUnverifiable) {
 			return nil, err
 		}
-		return nil, &classifiedTokenError{category: classifyJWTError(err), cause: err}
+		return nil, &classifiedError{category: classifyJWTError(err), cause: err}
 	}
 
 	return &JSONWebToken{
@@ -83,25 +92,4 @@ func classifyJWTError(err error) Error {
 	default:
 		return ErrBadToken
 	}
-}
-
-// classifiedTokenError preserves the historical single-unwrapping category
-// while exposing the original error to errors.Is and errors.As.
-type classifiedTokenError struct {
-	category Error
-	cause    error
-}
-
-func (e *classifiedTokenError) Error() string {
-	return fmt.Sprintf("%s: %s", e.category, e.cause)
-}
-
-func (e *classifiedTokenError) Unwrap() error { return e.category }
-
-func (e *classifiedTokenError) Is(target error) bool {
-	return errors.Is(e.category, target) || errors.Is(e.cause, target)
-}
-
-func (e *classifiedTokenError) As(target any) bool {
-	return errors.As(e.category, target) || errors.As(e.cause, target)
 }

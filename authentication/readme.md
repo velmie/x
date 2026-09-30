@@ -206,6 +206,69 @@ and best effort. A negative legacy refresh interval selects the same default and
 emits a bounded warning. Calling `Start` on a legacy source is a no-op, including
 after `Stop`; it neither replaces the lifetime nor restarts background refresh.
 
+Use `Shutdown(ctx)` when the owner must wait for completion. It permanently
+closes either kind of source, cancels active work, and waits for startup,
+refresh requests, response-body cleanup, and diagnostic callbacks. After a
+successful return, the source cannot start more work. Reads and `Start` return
+`ErrKeySourceStopped`, including for a source created by the legacy constructor.
+
+```go
+shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer shutdownCancel()
+if err := source.Shutdown(shutdownCtx); err != nil {
+    // The source is closed, but its work may still be finishing.
+    return err
+}
+```
+
+Concurrent and repeated calls are supported. A context error limits waiting;
+it cannot force a custom HTTP client or callback to return. A later call may
+continue waiting. Call `Shutdown` outside the source's callbacks. Callbacks can
+use the nonblocking `Stop`. The application still owns its authentication
+handlers and shared HTTP client; the source does not close that client.
+
+### JWT verification key policy
+
+Set `JWKSOptions.VerificationPolicy` to opt into public verification keys:
+
+```go
+options := authentication.JWKSOptions{
+    VerificationPolicy: &authentication.JWKSVerificationPolicy{
+        AllowedAlgorithms: []string{"RS256", "ES256"},
+    },
+}
+```
+
+The policy accepts public RSA keys of at least 2048 bits, EC keys on the matching
+NIST curve, and Ed25519 keys that encode canonical curve points of non-small order. Supported algorithms
+are RS256/384/512, PS256/384/512, ES256/384/512, and EdDSA (Ed25519). Private and
+symmetric key material is rejected for verification candidates. A nil policy
+preserves legacy key acceptance, including symmetric keys.
+
+When present, `use` must allow signatures and `key_ops` must include `verify`.
+Duplicate operations, conflicting usage metadata, and malformed metadata reject
+the response. Keys of another purpose or a disallowed algorithm are excluded.
+Duplicate IDs among usable keys reject the whole response regardless of order.
+A single usable key may omit `kid`; multiple usable keys without IDs are ambiguous.
+
+Each admitted key is bound to one algorithm. Its `alg`, when present, must match
+its key material and the policy. An omitted `alg` is accepted only when the policy
+identifies exactly one compatible algorithm. `JWTv5Parser` automatically passes
+the token's algorithm to `FetchPublicKeyForAlgorithm` and retains its own parser
+allowlist. Custom parsers and key-source wrappers must forward this optional
+method to enforce the binding. `KeySource` itself still requires only
+`FetchPublicKey`, which selects a key without checking a token's algorithm.
+
+Failed validation retains the preceding snapshot and its original age. An empty
+`keys: []` clears the snapshot. A nonempty response with no usable keys is a
+validation failure. Lookups of excluded keys and algorithm mismatches match
+`ErrJWKSKeyRejected`, not `ErrKeyNotFound`; they must not activate an absence-only
+fallback. Rejected IDs are retained only for the current snapshot.
+
+The policy and its algorithm list are copied during construction. Managed
+construction reports invalid policy configuration immediately. The eager
+constructor reports it through diagnostics and subsequent lookups reject it.
+
 ### JWT error categories and causes
 
 `JWTv5Parser` and `ViaJWT` retain the original JWT or key-source error for
@@ -234,16 +297,45 @@ response bodies. The source reads at most one extra byte to detect an oversized
 response and rejects it without replacing cached keys. Zero preserves unlimited
 response sizes. Non-success response bodies are closed without being read.
 
-`WarnFunc` receives bounded diagnostics identifying the operation, stage, reason,
-outcome, and HTTP status when applicable. Each shared refresh failure produces
-one warning, except cancellation. Response bodies, endpoint URLs, key IDs, and
-underlying error text are excluded. A body-close warning is reported only when
-there is no primary refresh failure. Callbacks run after the shared load completes
-and may call `FetchPublicKey` or `Stop`.
+`DiagnosticFunc` receives a `*JWKSError`. Its `Operation`, `Stage`, `Reason`,
+`Outcome`, `HTTPStatus`, and `Field` getters expose bounded fields suitable for structured
+logging. `Error()` includes those fields and excludes response bodies, endpoint
+URLs, key IDs, and underlying error text. When `DiagnosticFunc` is unset,
+`WarnFunc` receives this safe text. Supplying both selects `DiagnosticFunc` only.
+`Field` identifies a configuration field or a JSON path such as `keys[1].alg`,
+without including the rejected value. Secondary body-close failures also appear
+in the text as `close_reason=body_close_failed`.
 
-Returned errors retain underlying network, context, and decoding causes for
-`errors.Is` and `errors.As`. Those causes may contain sensitive data. Log the
-sanitized outer error or the supplied warning, rather than an unwrapped cause.
+| Failure | Stage | Reason |
+| --- | --- | --- |
+| Invalid endpoint | `config` | `invalid_endpoint` |
+| HTTP client failure | `request` | `request_failed` |
+| Non-200 response | `response` | `http_status` |
+| Response read failure | `read` | `body_read_failed` |
+| Malformed JSON | `decode` | `invalid_json` |
+| Exhausted refresh budget | `limit` | `rate_limit` |
+| Response close failure | `close` | `body_close_failed` |
+
+Returned configuration errors retain URL parsing causes. Refresh errors preserve
+network, context, decoding, and body-close causes for `errors.Is` and `errors.As`.
+A primary failure takes precedence over a secondary close failure, with both
+causes available through the same diagnostic. A close failure after valid keys
+were loaded remains a warning and does not prevent publication. Rate-limit
+lookup failures match both `ErrJWKSRateLimited` and the historical `ErrKeyNotFound`,
+and `errors.Unwrap` still returns `ErrKeyNotFound`.
+
+Each shared refresh failure produces one event. Cancellation alone is silent,
+but an accompanying close failure is reported. No callback is emitted for an
+ordinary lookup rejection; the caller receives that error directly. Managed
+configuration errors are returned to the constructor's caller.
+
+Callbacks run outside source locks, may run concurrently, and may call
+`FetchPublicKey` or `Stop`. `Shutdown` waits for them and must be called outside
+the callback. Use `DiagnosticFunc` when the logging adapter needs the original
+error objects. Pass the diagnostic and its `Unwrap()` result as structured
+fields, and redact sensitive values before output. Preserve the useful cause
+message and `Field` path. The legacy `WarnFunc` only receives the safe summary
+string, so it cannot inspect original error objects.
 
 ### JWKS snapshot age and refresh capacity
 

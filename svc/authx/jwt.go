@@ -59,6 +59,9 @@ var (
 	}
 )
 
+// Logger receives original errors in structured error and cause fields.
+// Implementations must support concurrent calls and redact sensitive values
+// in error chains before output, preserving useful causes and source fields.
 type Logger interface {
 	Info(msg string, v ...any)
 	Warn(msg string, v ...any)
@@ -102,7 +105,7 @@ func NewJWTMethod(opts ...JWTMethodOption) (*authentication.ViaJWT, error) {
 		opt(&cfg)
 	}
 	if err := validateJWTMethodOptions(&cfg); err != nil {
-		return nil, fmt.Errorf("invalid options: %s", err)
+		return nil, fmt.Errorf("invalid options: %w", err)
 	}
 	parser := jwt.NewParser(jwt.WithValidMethods(cfg.ValidSigningMethods))
 	viaJWT := authentication.NewViaJWT(
@@ -126,11 +129,7 @@ func keySource(cfg *JWTMethodOptions, log Logger) authentication.KeySource {
 			Client:              retryClient.StandardClient(),
 			RequestOnUnknownKID: opts.RequestOnUnknownKID,
 		}
-		if log != nil {
-			jwksOptions.WarnFunc = func(msg string) {
-				log.Warn("JWKS refresh", "operation", "refresh_keys", "diagnostic", msg)
-			}
-		}
+		configureJWKSDiagnostics(jwksOptions, log)
 		jwksOptions.SetRefreshRateLimit(opts.RequestRateLimit, opts.RequestRateLimitDuration)
 
 		source = jwksNonBlocking(opts.Endpoint.String(), jwksOptions, cfg.JWKSOptions.SourceReady)
@@ -158,32 +157,59 @@ type namedKeySource struct {
 	source authentication.KeySource
 }
 
+type fallbackKeySource struct {
+	primary, fallback    namedKeySource
+	log                  Logger
+	confirmedAbsenceOnly bool
+}
+
 func fallbackSource(a, b namedKeySource, log Logger, confirmedAbsenceOnly bool) authentication.KeySource {
-	return authentication.KeySourceFunc(func(ctx context.Context, kid string) (crypto.PublicKey, error) {
-		key, err := a.source.FetchPublicKey(ctx, kid)
-		if err == nil {
-			return key, nil
-		}
-		// JWKS returns the sentinel itself for a confirmed absent key. A wrapped
-		// ErrKeyNotFound can instead indicate a failed lookup, such as rate limiting.
-		useFallback := !confirmedAbsenceOnly || err == authentication.ErrKeyNotFound
-		if log != nil {
-			message, outcome := "JWT key lookup failed; using fallback", "fallback"
-			if !useFallback {
-				message, outcome = "JWT key lookup failed; fallback rejected", "rejected"
-			}
-			log.Warn(
-				message,
-				"operation", "fetch_key", "stage", "primary_source",
-				"reason", keySourceFailureReason(err), "outcome", outcome,
-				"source", a.name, "fallback_source", b.name,
-			)
-		}
+	return fallbackKeySource{primary: a, fallback: b, log: log, confirmedAbsenceOnly: confirmedAbsenceOnly}
+}
+
+func (s fallbackKeySource) FetchPublicKey(ctx context.Context, kid string) (crypto.PublicKey, error) {
+	return s.fetch(ctx, kid, "")
+}
+
+func (s fallbackKeySource) FetchPublicKeyForAlgorithm(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
+	return s.fetch(ctx, kid, algorithm)
+}
+
+func (s fallbackKeySource) fetch(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
+	key, err := fetchKeyForAlgorithm(ctx, s.primary.source, kid, algorithm)
+	if err == nil {
+		return key, nil
+	}
+	// JWKS returns the sentinel itself for a confirmed absent key. A wrapped
+	// ErrKeyNotFound can instead indicate a failed lookup, such as rate limiting.
+	useFallback := !s.confirmedAbsenceOnly || err == authentication.ErrKeyNotFound
+	if s.log != nil {
+		message, outcome := "JWT key lookup failed; using fallback", "fallback"
 		if !useFallback {
-			return nil, err
+			message, outcome = "JWT key lookup failed; fallback rejected", "rejected"
 		}
-		return b.source.FetchPublicKey(ctx, kid)
-	})
+		fields := []any{
+			"operation", "fetch_key", "stage", "primary_source",
+			"reason", keySourceFailureReason(err), "outcome", outcome,
+			"source", s.primary.name, "fallback_source", s.fallback.name,
+		}
+		s.log.Warn(message, append(fields, keySourceErrorFields(err)...)...)
+	}
+	if !useFallback {
+		return nil, err
+	}
+	return fetchKeyForAlgorithm(ctx, s.fallback.source, kid, algorithm)
+}
+
+func fetchKeyForAlgorithm(ctx context.Context, source authentication.KeySource, kid, algorithm string) (crypto.PublicKey, error) {
+	if algorithm != "" {
+		if aware, ok := source.(interface {
+			FetchPublicKeyForAlgorithm(context.Context, string, string) (crypto.PublicKey, error)
+		}); ok {
+			return aware.FetchPublicKeyForAlgorithm(ctx, kid, algorithm)
+		}
+	}
+	return source.FetchPublicKey(ctx, kid)
 }
 
 func keySourceFailureReason(err error) string {
@@ -192,6 +218,10 @@ func keySourceFailureReason(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
+	case errors.Is(err, authentication.ErrJWKSRateLimited):
+		return "rate_limited"
+	case errors.Is(err, authentication.ErrJWKSKeyRejected):
+		return "key_rejected"
 	case errors.Is(err, authentication.ErrKeySetExpired):
 		return "key_set_expired"
 	case errors.Is(err, authentication.ErrKeyNotFound):
@@ -269,4 +299,32 @@ func validateJWTMethodOptions(opts *JWTMethodOptions) error {
 	}
 
 	return nil
+}
+
+func configureJWKSDiagnostics(options *authentication.JWKSOptions, log Logger) {
+	if options.DiagnosticFunc != nil || options.WarnFunc != nil || log == nil {
+		return
+	}
+	options.DiagnosticFunc = func(event *authentication.JWKSError) {
+		fields := []any{
+			"operation", event.Operation(), "stage", event.Stage(),
+			"reason", event.Reason(), "outcome", event.Outcome(),
+			"status", event.HTTPStatus(), "source", "JWKS",
+		}
+		log.Warn("JWKS refresh", append(fields, keySourceErrorFields(event)...)...)
+	}
+}
+
+func keySourceErrorFields(err error) []any {
+	fields := []any{"error", err}
+	var diagnostic *authentication.JWKSError
+	if errors.As(err, &diagnostic) {
+		if diagnostic.Field() != "" {
+			fields = append(fields, "field", diagnostic.Field())
+		}
+		if cause := diagnostic.Unwrap(); cause != nil {
+			fields = append(fields, "cause", cause)
+		}
+	}
+	return fields
 }

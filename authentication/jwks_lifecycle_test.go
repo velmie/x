@@ -156,7 +156,7 @@ func TestLegacyJWKSNegativeIntervalUsesDefault(t *testing.T) {
 	}
 	select {
 	case message := <-warning:
-		if message != "operation=jwks_config stage=validate reason=negative_refresh_interval outcome=defaulted" {
+		if message != "operation=jwks_config stage=validate reason=negative_refresh_interval outcome=defaulted field=RefreshInterval" {
 			t.Fatal(message)
 		}
 	default:

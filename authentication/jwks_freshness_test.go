@@ -129,7 +129,7 @@ func TestJWKSReservedCapacityAllowsScheduledRotation(t *testing.T) {
 	if err := source.requestKeys(context.Background()); err != nil {
 		t.Fatalf("scheduled rotation denied: %v", err)
 	}
-	if err := source.requestKeys(context.Background()); !errors.Is(err, errRateLimitExceeded) {
+	if err := source.requestKeys(context.Background()); !errors.Is(err, ErrJWKSRateLimited) {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {

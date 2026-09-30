@@ -18,7 +18,8 @@ type ManagedJWTMethodOptions struct {
 	ValidSigningMethods []JWTSigningMethod
 	// FallbackPublicKey is used only for a confirmed absent key in a fresh snapshot.
 	FallbackPublicKey crypto.PublicKey
-	// Log receives bounded JWKS diagnostics when JWKSOptions.WarnFunc is unset.
+	// Log receives JWKS diagnostics and original causes when both source callbacks
+	// are unset. The logger must redact sensitive values before output.
 	Log Logger
 }
 
@@ -26,29 +27,36 @@ type ManagedJWTMethodOptions struct {
 // Canceling ctx stops managed refreshes and prevents subsequent key lookups.
 // The context must remain live for the lifetime of the method.
 func NewManagedJWTMethod(ctx context.Context, opts ManagedJWTMethodOptions) (*authentication.ViaJWT, error) {
+	method, _, err := NewManagedJWTMethodWithShutdown(ctx, opts)
+	return method, err
+}
+
+// NewManagedJWTMethodWithShutdown loads the initial keys and returns the method
+// with a function that cancels its source and waits for owned work to finish.
+// The context must remain live for the lifetime of the method.
+// The shutdown function is non-nil once a source exists, even if startup fails.
+// The caller should invoke it outside diagnostic callbacks, with a context that
+// bounds the wait. It does not wait for application handlers or close the client.
+func NewManagedJWTMethodWithShutdown(ctx context.Context, opts ManagedJWTMethodOptions) (*authentication.ViaJWT, func(context.Context) error, error) {
 	if opts.Endpoint == "" {
-		return nil, fmt.Errorf("JWKS endpoint is required")
+		return nil, nil, fmt.Errorf("JWKS endpoint is required")
 	}
 	methods := opts.ValidSigningMethods
 	if methods == nil {
 		methods = defaultJWTSigningMethods
 	}
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("ValidSigningMethods should not be empty")
+		return nil, nil, fmt.Errorf("ValidSigningMethods should not be empty")
 	}
 	sourceOptions := opts.JWKSOptions
-	if sourceOptions.WarnFunc == nil && opts.Log != nil {
-		sourceOptions.WarnFunc = func(message string) {
-			opts.Log.Warn("JWKS refresh", "operation", "refresh_keys", "diagnostic", message)
-		}
-	}
+	configureJWKSDiagnostics(&sourceOptions, opts.Log)
 	source, err := authentication.NewManagedKeySourceJWKS(opts.Endpoint, &sourceOptions)
 	if err != nil {
-		return nil, fmt.Errorf("configure JWKS source: %w", err)
+		return nil, nil, fmt.Errorf("configure JWKS source: %w", err)
 	}
 	if err := source.Start(ctx); err != nil {
 		source.Stop()
-		return nil, fmt.Errorf("start JWKS source: %w", err)
+		return nil, source.Shutdown, fmt.Errorf("start JWKS source: %w", err)
 	}
 	parser := jwt.NewParser(jwt.WithValidMethods(append([]string(nil), methods...)))
 	var keys authentication.KeySource = source
@@ -60,5 +68,5 @@ func NewManagedJWTMethod(ctx context.Context, opts ManagedJWTMethodOptions) (*au
 			true,
 		)
 	}
-	return authentication.NewViaJWT(authentication.NewJWTv5Parser(parser), keys), nil
+	return authentication.NewViaJWT(authentication.NewJWTv5Parser(parser), keys), source.Shutdown, nil
 }
