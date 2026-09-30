@@ -1,6 +1,8 @@
 package bootstrap
 
-// Logger represents basic logging behavior
+// Logger receives concurrent lifecycle records with original error objects.
+// Implementations must redact sensitive application data before serializing
+// errors, retaining useful causes and service identifiers.
 type Logger interface {
 	Info(msg string, args ...any)
 	Error(msg string, args ...any)
