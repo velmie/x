@@ -31,7 +31,7 @@ func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, erro
 	} else if exporter == nil {
 		exporter, err = CreateExporter(ctx, c)
 		if err != nil {
-			return nil, errors.Join(fmt.Errorf("cannot create exporter: %w", err), closeSpanExporter(ctx, exporter))
+			return nil, fmt.Errorf("cannot create exporter: %w", err)
 		}
 	}
 

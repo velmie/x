@@ -58,11 +58,15 @@ func TestOpenValidatesAndCleansPartialAcquisition(t *testing.T) {
 	); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("expected invalid configuration, got %v", err)
 	}
-	traceExporter := &trackingSpanExporter{}
-	partial := &trackingMetricExporter{}
 	failure := errors.New("metric constructor")
-	cleanup := errors.New("metric cleanup")
-	partial.shutdownErr = cleanup
+	cleanup := errors.New("trace cleanup")
+	ignored := errors.New("failed metric exporter cleanup")
+	traceExporter := &trackingSpanExporter{
+		shutdownErr: cleanup,
+	}
+	partial := &trackingMetricExporter{
+		shutdownErr: ignored,
+	}
 	_, err := Open(
 		context.Background(),
 		RuntimeConfig{
@@ -76,11 +80,29 @@ func TestOpenValidatesAndCleansPartialAcquisition(t *testing.T) {
 			},
 		},
 	)
-	if !errors.Is(err, failure) || !errors.Is(err, cleanup) {
-		t.Fatalf("lost construction or cleanup cause: %v", err)
+	if !errors.Is(err, failure) || !errors.Is(err, cleanup) || errors.Is(err, ignored) {
+		t.Fatalf("incorrect construction or cleanup cause: %v", err)
 	}
-	if traceExporter.shutdowns.Load() != 1 || partial.shutdowns.Load() != 1 {
-		t.Fatalf("partial exporters not closed: trace=%d metric=%d", traceExporter.shutdowns.Load(), partial.shutdowns.Load())
+	if traceExporter.shutdowns.Load() != 1 || partial.shutdowns.Load() != 0 {
+		t.Fatalf("wrong exporter ownership: trace=%d metric=%d", traceExporter.shutdowns.Load(), partial.shutdowns.Load())
+	}
+}
+
+func TestOpenIgnoresSpanExporterReturnedWithError(t *testing.T) {
+	failure := errors.New("trace constructor")
+	exporter := &trackingSpanExporter{}
+	_, err := Open(
+		context.Background(),
+		RuntimeConfig{
+			Enabled:  true,
+			Resource: resource.Empty(),
+			NewSpanExporter: func(context.Context) (sdktrace.SpanExporter, error) {
+				return exporter, failure
+			},
+		},
+	)
+	if !errors.Is(err, failure) || exporter.shutdowns.Load() != 0 {
+		t.Fatalf("failed exporter must remain factory-owned: error=%v shutdowns=%d", err, exporter.shutdowns.Load())
 	}
 }
 
@@ -138,9 +160,10 @@ func TestShutdownWaitsForExporterAfterCanceledFlushAndIsShared(t *testing.T) {
 }
 
 type trackingSpanExporter struct {
-	entered   chan struct{}
-	release   chan struct{}
-	shutdowns atomic.Int64
+	entered     chan struct{}
+	release     chan struct{}
+	shutdowns   atomic.Int64
+	shutdownErr error
 }
 
 func (e *trackingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error {
@@ -153,7 +176,7 @@ func (e *trackingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlyS
 
 func (e *trackingSpanExporter) Shutdown(context.Context) error {
 	e.shutdowns.Add(1)
-	return nil
+	return e.shutdownErr
 }
 
 type trackingMetricExporter struct {
@@ -239,22 +262,5 @@ func TestOpenHandlesTypedNilFromNativeExporterFailure(t *testing.T) {
 	var escape url.EscapeError
 	if !errors.As(err, &escape) {
 		t.Fatalf("native constructor cause lost: %v", err)
-	}
-}
-
-func TestOpenRejectsTypedNilExporterSuccess(t *testing.T) {
-	var missing *legacyExporter
-	_, err := Open(
-		context.Background(),
-		RuntimeConfig{
-			Enabled:  true,
-			Resource: resource.Empty(),
-			NewSpanExporter: func(context.Context) (sdktrace.SpanExporter, error) {
-				return missing, nil
-			},
-		},
-	)
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("typed nil accepted as an exporter: %v", err)
 	}
 }

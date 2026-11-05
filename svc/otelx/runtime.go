@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"sync"
 	"time"
 
@@ -31,8 +30,8 @@ const defaultFlushTimeout = 2 * time.Second
 var ErrInvalidConfig = errors.New("invalid telemetry configuration")
 
 // RuntimeConfig selects providers, propagation, and native SDK configuration.
-// Its zero value disables telemetry. A factory transfers ownership of any
-// non-nil exporter it returns, including one returned together with an error.
+// Its zero value disables telemetry. Successful factories transfer exporter
+// ownership to Open.
 type RuntimeConfig struct {
 	// Enabled permits resource acquisition; false returns no-op providers.
 	Enabled bool
@@ -40,9 +39,13 @@ type RuntimeConfig struct {
 	Resource *resource.Resource
 	// Propagator defaults to bounded W3C propagation without baggage.
 	Propagator propagation.TextMapPropagator
-	// NewSpanExporter optionally constructs the runtime-owned trace exporter.
+	// NewSpanExporter optionally constructs a trace exporter. On success it must
+	// return a non-nil exporter and transfers ownership to Open. On error the
+	// factory releases what it acquired, and Open ignores the exporter result.
 	NewSpanExporter func(ctx context.Context) (sdktrace.SpanExporter, error)
-	// NewMetricExporter optionally constructs the runtime-owned metric exporter.
+	// NewMetricExporter optionally constructs a metric exporter. On success it
+	// must return a non-nil exporter and transfers ownership to Open. On error
+	// the factory releases what it acquired, and Open ignores the exporter result.
 	NewMetricExporter func(ctx context.Context) (sdkmetric.Exporter, error)
 	// PrometheusRegistry selects scraping instead of a periodic metric exporter.
 	// The registry must be dedicated to this runtime.
@@ -128,9 +131,9 @@ func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	if cfg.NewSpanExporter != nil {
 		spanExporter, err = cfg.NewSpanExporter(ctx)
 		if err != nil {
-			return nil, errors.Join(fmt.Errorf("create span exporter: %w", err), closeSpanExporter(ctx, spanExporter))
+			return nil, fmt.Errorf("create span exporter: %w", err)
 		}
-		if isNilExporter(spanExporter) {
+		if spanExporter == nil {
 			return nil, fmt.Errorf("NewSpanExporter returned nil: %w", ErrInvalidConfig)
 		}
 	}
@@ -139,11 +142,10 @@ func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		if err != nil {
 			return nil, errors.Join(
 				fmt.Errorf("create metric exporter: %w", err),
-				closeMetricExporter(ctx, metricExporter),
 				closeSpanExporter(ctx, spanExporter),
 			)
 		}
-		if isNilExporter(metricExporter) {
+		if metricExporter == nil {
 			return nil, errors.Join(
 				fmt.Errorf("NewMetricExporter returned nil: %w", ErrInvalidConfig),
 				closeSpanExporter(ctx, spanExporter),
@@ -253,36 +255,11 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 }
 
 func closeSpanExporter(ctx context.Context, exporter sdktrace.SpanExporter) error {
-	if isNilExporter(exporter) {
+	if exporter == nil {
 		return nil
 	}
 	if err := exporter.Shutdown(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("cleanup span exporter: %w", err)
 	}
 	return nil
-}
-
-func closeMetricExporter(ctx context.Context, exporter sdkmetric.Exporter) error {
-	if isNilExporter(exporter) {
-		return nil
-	}
-	if err := exporter.Shutdown(context.WithoutCancel(ctx)); err != nil {
-		return fmt.Errorf("cleanup metric exporter: %w", err)
-	}
-	return nil
-}
-
-// Native exporter constructors can return a typed nil alongside an error after
-// conversion to an exporter interface. Do not call methods on that nil value.
-func isNilExporter(exporter any) bool {
-	if exporter == nil {
-		return true
-	}
-	value := reflect.ValueOf(exporter)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }

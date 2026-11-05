@@ -42,14 +42,15 @@ The native periodic reader can apply its own configured timeout to a final metri
 failure is returned; completion does not imply that the collector accepted every measurement. If final collection and
 exporter shutdown return the same cause, the SDK does not always expose the provider error's precise substage. The
 runtime retains it as `shutdown metrics` and separately retains `shutdown metric exporter`; a shared cause can appear
-more than once. `Open` also cleans up partially acquired exporters before returning a setup error. Cleanup uses detached
-cancellation and can therefore wait for an exporter to finish.
+more than once. If a later setup step fails, `Open` cleans up exporters acquired by successful factories. Cleanup uses
+detached cancellation and can therefore wait for an exporter to finish.
 
 The zero `RuntimeConfig` disables telemetry. It returns no-op providers and bounded W3C propagation without acquiring
 exporters, readers, registries, or workers. Unused configuration is not validated in disabled mode. When enabled,
 `Resource` and at least one trace or metric pipeline are required. An omitted signal uses a no-op provider.
-`NewMetricExporter` and `PrometheusRegistry` are mutually exclusive. Factory results transfer exporter ownership to the
-runtime, including a non-nil exporter returned with an error.
+`NewMetricExporter` and `PrometheusRegistry` are mutually exclusive. Each successful factory returns a non-nil exporter
+and transfers its ownership to the runtime. A factory that returns an error must release anything it acquired before
+returning. `Open` ignores its exporter result.
 
 Use `runtime.TracerProvider.Tracer(scope)`, `runtime.MeterProvider.Meter(scope)`, and `runtime.Propagator` when
 assembling adapters. `Open` does not install globals. Applications that use global OTel APIs can explicitly call
