@@ -2,8 +2,6 @@ package otelx
 
 import (
 	"context"
-	"errors"
-	"reflect"
 	"sync"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -54,31 +52,16 @@ type shutdownMetricExporter struct {
 	sdkmetric.Exporter
 	mu            sync.Mutex
 	stopping      bool
-	failures      []metricExportFailure
+	failures      []error
 	shutdownError error
 }
-
-type metricExportFailure struct {
-	cause error
-	final bool
-}
-
-// The SDK forwards the shutdown context to its final export. The marker keeps
-// that export distinct from a timed-out flush still running on the reader.
-type metricShutdownContextKey struct{}
 
 func (e *shutdownMetricExporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
 	err := e.Exporter.Export(ctx, data)
 	if err != nil {
 		e.mu.Lock()
 		if e.stopping {
-			e.failures = append(
-				e.failures,
-				metricExportFailure{
-					cause: err,
-					final: ctx.Value(metricShutdownContextKey{}) != nil,
-				},
-			)
+			e.failures = append(e.failures, err)
 		}
 		e.mu.Unlock()
 	}
@@ -99,30 +82,8 @@ func (e *shutdownMetricExporter) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (e *shutdownMetricExporter) shutdownFailures() ([]metricExportFailure, error) {
+func (e *shutdownMetricExporter) shutdownFailures() ([]error, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return append([]metricExportFailure(nil), e.failures...), e.shutdownError
-}
-
-// containsSameError finds the actual error value without invoking custom Is
-// methods, which can match a different failure and hide its diagnostic stage.
-func containsSameError(tree error, target error) bool {
-	if tree == nil || target == nil {
-		return false
-	}
-	treeValue := reflect.ValueOf(tree)
-	targetValue := reflect.ValueOf(target)
-	if treeValue.Type() == targetValue.Type() && treeValue.Comparable() && targetValue.Comparable() && tree == target {
-		return true
-	}
-	if many, ok := tree.(interface{ Unwrap() []error }); ok {
-		for _, child := range many.Unwrap() {
-			if containsSameError(child, target) {
-				return true
-			}
-		}
-		return false
-	}
-	return containsSameError(errors.Unwrap(tree), target)
+	return append([]error(nil), e.failures...), e.shutdownError
 }

@@ -296,7 +296,7 @@ type broadMatchError struct{}
 func (*broadMatchError) Error() string { return "unrelated shutdown failure" }
 func (*broadMatchError) Is(error) bool { return true }
 
-func TestShutdownDoesNotMistakeFlushFailureForFinalExportFailure(t *testing.T) {
+func TestShutdownRetainsFlushAndCloseFailuresWithSameCause(t *testing.T) {
 	shared := errors.New("shared exporter failure")
 	exporter := &flushAndCloseMetricExporter{
 		cause: shared,
@@ -321,9 +321,8 @@ func TestShutdownDoesNotMistakeFlushFailureForFinalExportFailure(t *testing.T) {
 	counter.Add(context.Background(), 1)
 	err = r.Shutdown(context.Background())
 	if !errors.Is(err, shared) || !strings.Contains(err.Error(), "flush metrics") ||
-		!strings.Contains(err.Error(), "shutdown metric exporter") ||
-		strings.Contains(err.Error(), "export metrics during shutdown") {
-		t.Fatalf("incorrect exporter failure stages: %v", err)
+		!strings.Contains(err.Error(), "shutdown metric exporter") {
+		t.Fatalf("lost a flush or exporter shutdown failure: %v", err)
 	}
 }
 

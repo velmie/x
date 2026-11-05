@@ -207,22 +207,20 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 				r.metricExport.startShutdown()
 			}
 			var errs []error
-			var traceFlushErr error
-			var metricFlushErr error
 			if r.traces != nil {
 				flushCtx, cancel := context.WithTimeout(ctx, r.flushTimeout)
-				traceFlushErr = r.traces.ForceFlush(flushCtx)
+				err := r.traces.ForceFlush(flushCtx)
 				cancel()
-				if traceFlushErr != nil {
-					errs = append(errs, fmt.Errorf("flush traces: %w", traceFlushErr))
+				if err != nil {
+					errs = append(errs, fmt.Errorf("flush traces: %w", err))
 				}
 			}
 			if r.metrics != nil {
 				flushCtx, cancel := context.WithTimeout(ctx, r.flushTimeout)
-				metricFlushErr = r.metrics.ForceFlush(flushCtx)
+				err := r.metrics.ForceFlush(flushCtx)
 				cancel()
-				if metricFlushErr != nil {
-					errs = append(errs, fmt.Errorf("flush metrics: %w", metricFlushErr))
+				if err != nil {
+					errs = append(errs, fmt.Errorf("flush metrics: %w", err))
 				}
 			}
 			cleanupCtx := context.WithoutCancel(ctx)
@@ -231,43 +229,21 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 					errs = append(errs, fmt.Errorf("shutdown traces: %w", err))
 				}
 				for _, err := range r.traceExport.shutdownFailures() {
-					if !containsSameError(traceFlushErr, err) {
-						errs = append(errs, fmt.Errorf("export traces during shutdown: %w", err))
-					}
+					errs = append(errs, fmt.Errorf("export traces during shutdown: %w", err))
 				}
 			}
 			if r.metrics != nil {
-				metricCleanupCtx := context.WithValue(cleanupCtx, metricShutdownContextKey{}, true)
-				metricShutdownErr := r.metrics.Shutdown(metricCleanupCtx)
-				var exportFailures []metricExportFailure
-				var exporterShutdownErr error
+				if err := r.metrics.Shutdown(cleanupCtx); err != nil {
+					errs = append(errs, fmt.Errorf("shutdown metrics: %w", err))
+				}
 				if r.metricExport != nil {
-					exportFailures, exporterShutdownErr = r.metricExport.shutdownFailures()
-				}
-				shutdownReportedExport := false
-				for _, failure := range exportFailures {
-					if failure.final && containsSameError(metricShutdownErr, failure.cause) {
-						shutdownReportedExport = true
+					exportFailures, exporterShutdownErr := r.metricExport.shutdownFailures()
+					for _, err := range exportFailures {
+						errs = append(errs, fmt.Errorf("export metrics during shutdown: %w", err))
 					}
-				}
-				if metricShutdownErr != nil {
-					phase := "shutdown metrics"
-					if shutdownReportedExport {
-						phase = "export metrics during shutdown"
+					if exporterShutdownErr != nil {
+						errs = append(errs, fmt.Errorf("shutdown metric exporter: %w", exporterShutdownErr))
 					}
-					errs = append(errs, fmt.Errorf("%s: %w", phase, metricShutdownErr))
-				}
-				for _, failure := range exportFailures {
-					if !failure.final && containsSameError(metricFlushErr, failure.cause) {
-						continue
-					}
-					if failure.final && containsSameError(metricShutdownErr, failure.cause) {
-						continue
-					}
-					errs = append(errs, fmt.Errorf("export metrics during shutdown: %w", failure.cause))
-				}
-				if exporterShutdownErr != nil {
-					errs = append(errs, fmt.Errorf("shutdown metric exporter: %w", exporterShutdownErr))
 				}
 			}
 			r.shutdownErr = errors.Join(errs...)
