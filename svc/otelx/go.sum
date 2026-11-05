@@ -1,3 +1,5 @@
+connectrpc.com/connect v1.21.0 h1:LhqSJt7jHf5NJBo9Jq/t/9FjcYAideif0mg+qe2jCUs=
+connectrpc.com/connect v1.21.0/go.mod h1:A2ygJrukXwWy32vkCAAHNVguZrqZ+jeZ9rGRnGR4dN4=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
@@ -37,6 +39,10 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/velmie/x/envx v0.3.0 h1:AWYhZLlo1nR/yJlmSCxrS0k23kPaMiwsGhfrJwd2Acw=
 github.com/velmie/x/envx v0.3.0/go.mod h1:L8FfBBrLEppQNy2DTBFHyMir5HVs0wWBp19MBV5DvuI=
+github.com/velmie/x/svc/apperror v0.1.0 h1:AOdobfAkXOVlWbn9UA2AbeAH5APaTzX5PxWFE9hTm4g=
+github.com/velmie/x/svc/apperror v0.1.0/go.mod h1:bcTwkdh6H0pvVxtfd2SUnsp7STu6annAtjBleYSR3Ao=
+github.com/velmie/x/svc/http v1.6.0 h1:nLCyMsZxUx0oVykmNFTUx7snL7SZvcioKrlPyN2krOA=
+github.com/velmie/x/svc/http v1.6.0/go.mod h1:C0ZpAN7hwLyts79bCWdMniDXsqB+lvg3l5M6bhaO+3I=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/propagators/b3 v1.46.0 h1:OFVqWObn7xLIbOjE/koO0LS9fZJNgAyBD0msA+UQAoc=
