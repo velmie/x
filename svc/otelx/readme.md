@@ -1,107 +1,310 @@
 # otelx
 
-This package simplifies the process of configuring and initializing OpenTelemetry tracing.
+`otelx` assembles explicitly configured OpenTelemetry tracing and metrics providers. A `Runtime` owns the exporters and
+SDK workers it creates, and its `Shutdown` joins their work. The module also provides bounded propagation, a bounded
+HTTP instrumentation profile, and `slog` correlation.
 
-## Environment variables
+## Open and stop a runtime
 
-It includes a function for reading configuration values from environment variables. Below is a table describing the
-available environment variables:
-
-| Variable                                | OTEL Standard Equivalent                | Description                                                   | Default Value |
-|-----------------------------------------|-----------------------------------------|---------------------------------------------------------------|---------------|
-| TRACING_DISABLED                        | OTEL_SDK_DISABLED                       | Disables tracing by setting noop exporter                     | false         |
-| TRACING_PROPAGATION_BAGGAGE             | -                                       | Enables or disables baggage propagation                       | true          |
-| TRACING_PROPAGATION_TRACE_CONTEXT       | -                                       | Enables or disables trace context propagation                 | true          |
-| TRACING_PROPAGATION_B3_MULTIPLE_HEADER  | -                                       | Enables or disables B3 multiple header propagation            | false         |
-| TRACING_PROPAGATION_B3_SINGLE_HEADER    | -                                       | Enables or disables B3 single header propagation              | true          |
-| TRACING_SAMPLING_RATIO                  | OTEL_TRACES_SAMPLER_ARG                 | Sets the sampling ratio for traces                            | 1             |
-| TRACING_RESOURCE_ATTRIBUTES             | OTEL_RESOURCE_ATTRIBUTES                | Sets resource attributes                                      | none          |
-| TRACING_RESOURCE_DETECTORS              | -                                       | List of resource detectors to use                             | none          |
-| TRACING_RESOURCE_SERVICE_NAME           | OTEL_SERVICE_NAME                       | Sets the service name for the resource                        | none          |
-| TRACING_RESOURCE_DEPLOYMENT_ENVIRONMENT | -                                       | Sets the deployment environment for the resource              | none          |
-| TRACING_SECURITY_AUTHORIZATION_HEADER   | -                                       | Sets the authorization header for security                    | none          |
-| TRACING_SECURITY_INSECURE               | -                                       | Sets the security mode (insecure or not)                      | true          |
-| TRACING_COMMUNICATION_ENDPOINT          | OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT | Sets the endpoint for communication                           | none          |
-| TRACING_COMMUNICATION_EXPORT_METHOD     | OTEL_EXPORTER_OTLP_TRACES_PROTOCOL or OTEL_EXPORTER_OTLP_PROTOCOL | Sets the export method for communication (grpc, http, stdout) | grpc          |
-
-The package supports both legacy TRACING_* variables and standard OpenTelemetry OTEL_* variables. When both are set, OTEL_* variables take precedence.
-
-TRACING_RESOURCE_ATTRIBUTES can be extended with other environment variables:
-
-TRACING_RESOURCE_ATTRIBUTES=attr.key=val,from.another.var=$ANOTHER_VAR
-
-## Usage example
+Build `runtimeConfig` from service configuration, then open and stop the runtime:
 
 ```go
-    cfg, err := otelx.ConfigFromEnv()
-
-// optionally rewrite parameters
-cfg.Resource.ServiceName = "My Service"
-cfg.Communication.ExportMethod = otelx.ExportMethodGRPC
-
-// this will create and set tracer provider, exporter and propagators based on the given configuration
-// every component could be configured or overridden by specifying options
-telemetry, err := otelx.Setup(
-context.Background(),
-cfg,
-otelx.WithResourceAttributes(attribute.String("my.custom.param", "test")),
-)
-
+runtime, err := otelx.Open(ctx, runtimeConfig)
 if err != nil {
-fmt.Println("failed to setup OpenTelemetry: ", err)
-return
+    return err
 }
-// ...
+runErr := runService(ctx, runtime)
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+return errors.Join(runErr, runtime.Shutdown(shutdownCtx))
 ```
 
-You can use custom detectors. For this, they need to be registered in advance using the otelx.RegisterDetector function.
+`Shutdown` uses the caller's context, capped by `FlushTimeout`, for each preliminary flush. It then detaches
+cancellation for final provider shutdown and waits for owned exporter work. This cooperative join can outlast the
+context. Exporters and borrowed writers must eventually return. Stop and join telemetry producers and the scrape server
+before calling it. Close borrowed files and transports afterwards. Do not shut down the exposed providers separately.
+Concurrent and repeated calls wait for the same result.
 
-There are three ways to add detectors:
-
-* Through the TRACING_RESOURCE_DETECTORS environment variable, where the detector names should be listed separated by
-  commas.
-* You can add the detector name after loading the configuration.
-* You can directly set a detector instance using the WithResourceDetectors option.
+For example, a service can assemble the configuration from an explicit resource, a propagation policy, and native
+exporter factories:
 
 ```go
-package example
-
-import (
-	"context"
-	"github.com/velmie/x/svc/otelx"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/resource"
-)
-
-type MyCustomDetector struct{}
-
-func (m MyCustomDetector) Detect(ctx context.Context) (*resource.Resource, error) {
-	return resource.NewWithAttributes(
-		semconv.SchemaURL,
-		attribute.String("my.custom.attribute1", "hello"),
-		attribute.Int("my.custom.attribute2", 42),
-	), nil
-}
-
-// ... 
-
-func main() {
-	cfg, err := otelx.ConfigFromEnv()
-
-	otelx.RegisterDetector("my.custom_detector", &MyCustomDetector{})
-
-	// it's possible to specify directly which detectors to use
-	cfg.Resource.Detectors = append(cfg.Resource.Detectors, "my.custom_detector")
-
-	otelx.Setup(context.Background(), cfg) // alternatively you may specify it directly using otelx.WithResourceDetectors(&MyCustomDetector{})
+runtimeConfig := otelx.RuntimeConfig{
+    Enabled:           cfg.Enabled,
+    Resource:          serviceResource,
+    Propagator:        policy,
+    NewSpanExporter:   spanFactory,
+    NewMetricExporter: metricFactory,
 }
 ```
 
-## Legacy setup fixes
+The native periodic reader can apply its own configured timeout to a final metric export. A timeout or another export
+failure is returned; completion does not imply that the collector accepted every measurement. If final collection and
+exporter shutdown return the same cause, the SDK does not always expose the provider error's precise substage. The
+runtime retains it as `shutdown metrics` and separately retains `shutdown metric exporter`; a shared cause can appear
+more than once. `Open` also cleans up partially acquired exporters before returning a setup error. Cleanup uses detached
+cancellation and can therefore wait for an exporter to finish.
 
-- `Setup` wraps exporter construction errors so their causes remain inspectable.
-- When setup fails after acquiring an exporter, it shuts the exporter down and returns any cleanup error with the primary error.
-- Disabled setup uses a no-op exporter without constructing a network or stdout exporter.
-- The gRPC exporter now sends the configured authorization header.
+The zero `RuntimeConfig` disables telemetry. It returns no-op providers and bounded W3C propagation without acquiring
+exporters, readers, registries, or workers. Unused configuration is not validated in disabled mode. When enabled,
+`Resource` and at least one trace or metric pipeline are required. An omitted signal uses a no-op provider.
+`NewMetricExporter` and `PrometheusRegistry` are mutually exclusive. Factory results transfer exporter ownership to the
+runtime, including a non-nil exporter returned with an error.
 
-`Setup` and named detector registration are deprecated. New services should construct resources explicitly and use `Open`.
+Use `runtime.TracerProvider.Tracer(scope)`, `runtime.MeterProvider.Meter(scope)`, and `runtime.Propagator` when
+assembling adapters. `Open` does not install globals. Applications that use global OTel APIs can explicitly call
+`otel.SetTracerProvider`, `otel.SetMeterProvider`, and `otel.SetTextMapPropagator` at the executable boundary.
+
+`Open` does not read environment variables directly. The SDK merges `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_SERVICE_NAME`
+into the supplied resource, with explicit resource attributes taking precedence on duplicate keys. Native SDK components
+and exporter constructors may read other `OTEL_*` settings. A service that requires strict identity should validate its environment
+before calling `Open` and configure native exporter options explicitly.
+
+## Exporters, resources, and metrics
+
+Export destinations, TLS, headers, timeouts, retries, compression, connections, and writers use native exporter
+constructors and options. For example, an HTTPS trace factory can use:
+
+```go
+tlsConfig := &tls.Config{
+    MinVersion: tls.VersionTLS12,
+}
+spanFactory := func(ctx context.Context) (sdktrace.SpanExporter, error) {
+    return otlptracehttp.New(
+        ctx,
+        otlptracehttp.WithEndpointURL("https://collector.example:4318/v1/traces"),
+        otlptracehttp.WithTLSClientConfig(tlsConfig),
+        otlptracehttp.WithHeaders(map[string]string{"Authorization": authorizationValue}),
+    )
+}
+```
+
+For gRPC, use the native constructor and TLS credentials:
+
+```go
+tlsConfig := &tls.Config{
+    MinVersion: tls.VersionTLS12,
+}
+spanFactory := func(ctx context.Context) (sdktrace.SpanExporter, error) {
+    return otlptracegrpc.New(
+        ctx,
+        otlptracegrpc.WithEndpoint("collector.example:4317"),
+        otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsConfig)),
+        otlptracegrpc.WithHeaders(map[string]string{"authorization": authorizationValue}),
+    )
+}
+```
+
+A metric factory uses the corresponding native constructor:
+
+```go
+metricFactory := func(ctx context.Context) (sdkmetric.Exporter, error) {
+    return otlpmetrichttp.New(
+        ctx,
+        otlpmetrichttp.WithEndpointURL("https://collector.example:4318/v1/metrics"),
+        otlpmetrichttp.WithTLSClientConfig(tlsConfig),
+    )
+}
+```
+
+The service chooses and validates the endpoint, credentials, trust roots, transport, and retry policy. A custom exporter
+implements the native SDK exporter interface and is returned by the corresponding factory. An explicit stdout writer
+can be supplied with `stdouttrace.WithWriter`. Close a borrowed writer only after runtime shutdown.
+
+Construct the resource with native attributes and optional detectors before `Open`. Pass a native `sdktrace.Sampler` to
+`Sampler`, and native `sdkmetric.View` values to `Views`. The sampler defaults to
+`sdktrace.ParentBased(sdktrace.AlwaysSample())`. `BatchOptions` and `ReaderOptions` accept native SDK tuning options.
+The runtime creates no application-specific instruments.
+
+For Prometheus, use a dedicated registry and serve the returned handler on an application-owned server:
+
+```go
+registry := prometheus.NewRegistry()
+runtime, err := otelx.Open(
+    ctx,
+    otelx.RuntimeConfig{
+        Enabled:            true,
+        Resource:           serviceResource,
+        PrometheusRegistry: registry,
+    },
+)
+if err != nil {
+    return err
+}
+```
+
+The application may register Go or process collectors on that registry before opening the runtime. The runtime does not
+register with Prometheus globals or start a listener. The registry belongs to this runtime and must not be shared with
+another runtime. `runtime.PrometheusHandler` is nil when Prometheus is not selected.
+
+## Bounded propagation
+
+The zero `PropagationPolicy` accepts and emits W3C trace context without baggage. `FormatW3C`, `FormatB3Single`, and
+`FormatB3Multi` select one encoding. An unknown format or invalid limits and rules return an error matching
+`otelx.ErrInvalidConfig`.
+
+```go
+policy, err := otelx.NewPropagation(
+    otelx.PropagationPolicy{
+        Format: otelx.FormatW3C,
+        Baggage: []otelx.BaggageRule{
+            {
+                Key:    "traffic.class",
+                Values: []string{"interactive", "batch"},
+            },
+        },
+    },
+)
+if err != nil {
+    return err
+}
+```
+
+Default limits are 512 bytes per trace field, 1024 bytes for the baggage header, and 16 baggage members. The complete
+set of permitted key/value combinations must fit the configured bounds and the native SDK's baggage limits. Rules are
+copied at construction. Values are decoded application values; serialization uses the native baggage format.
+
+Extraction rejects mixed recognized trace encodings, duplicate case-insensitive aliases, repeated values, and fields
+exceeding the bound. W3C input must use the fixed lowercase version-00 representation. Inherited span context, vendor tracestate, and
+baggage are cleared while cancellation, deadlines, and ordinary context values remain. Baggage is evaluated
+independently: ambiguous or oversized baggage is discarded, unknown keys are dropped, and permitted members with
+properties are rejected. B3 debug is normalized to ordinary sampling state.
+
+`FilterContext` removes vendor state and unapproved baggage while preserving trace and span identity and whether the
+parent is local or remote. Injection applies the same bounds. It removes stale recognized fields from native
+`propagation.HeaderCarrier` and `propagation.MapCarrier`. Other `TextMapCarrier` implementations must supply fresh
+propagation fields because the native interface has no delete operation. Carriers that can hold repeated values should
+implement `propagation.ValuesGetter`, so extraction can detect ambiguity.
+
+A custom native propagator passed to `RuntimeConfig` or the HTTP profile owns its own propagation policy. Legacy
+mixed-format deployments can continue using their existing native composite propagator until they migrate deliberately.
+
+## HTTP instrumentation
+
+`otelhttpx.NewHandler` wraps one selected finite route. Pass fixed operation and route labels, not values taken from a
+request:
+
+```go
+handler, err := otelhttpx.NewHandler(
+    next,
+    otelhttpx.HandlerConfig{
+        Operation:  "books.get",
+        Route:      "/books/{id}",
+        Tracer:     runtime.TracerProvider.Tracer("books"),
+        Meter:      runtime.MeterProvider.Meter("books"),
+        Propagator: runtime.Propagator,
+    },
+)
+if err != nil {
+    return err
+}
+```
+
+Install it outside recovery to observe aborted delivery, and omit operational routes in the application router. The
+handler uses `response.StatusRecorder` from `svc/http`. Use `http.ResponseController` for supported writer operations
+such as flushing.
+
+`otelhttpx.NewTransport` measures one `RoundTrip` through response headers or an error:
+
+```go
+transport, err := otelhttpx.NewTransport(
+    baseTransport,
+    otelhttpx.TransportConfig{
+        Operation:  "peer.fetch",
+        Tracer:     runtime.TracerProvider.Tracer("client"),
+        Meter:      runtime.MeterProvider.Meter("client"),
+        Propagator: runtime.Propagator,
+    },
+)
+if err != nil {
+    return err
+}
+```
+
+The transport clones request headers, leaves the caller's request unchanged, and returns the original response body and
+error. The span ends before the body is consumed. The caller owns the body, base transport, TLS, and retries. An attempt
+means one invocation of `RoundTrip`, not retries inside the base transport. With `*otelx.Propagation`, the parent is
+filtered before starting the child span.
+
+The profile creates only these instruments:
+
+| Instrument | Boundary |
+| --- | --- |
+| `http.server.requests` | One selected handler invocation, including an abort |
+| `http.server.request.duration` | Handler entry through return or unwind, in seconds |
+| `http.client.requests` | One `RoundTrip` invocation |
+| `http.client.request.duration` | `RoundTrip` entry through response headers or error, in seconds |
+
+Attributes are the fixed operation and route, normalized method, observed status, and bounded failure type where
+applicable. A transport error uses `transport_failed`; HTTP status 400 or higher sets client span status `remote_error`.
+A server status 500 or higher sets `server_error`; ordinary 4xx does not. An interrupted handler uses `handler_aborted`.
+Before a final response status exists, the recorded status is zero. Raw URLs, headers, request bodies, and error
+messages are not recorded by this profile. Connect-specific outcome annotation remains in the service.
+
+Required dependencies and labels are validated with errors matching `otelx.ErrInvalidConfig`; instrument-construction
+errors retain their causes. Do not apply both native and bounded instrumentation to the same request. Existing native
+`otelhttp` instrumentation retains its native timing and attribute semantics.
+
+## `slog` correlation and SDK diagnostics
+
+Wrap the base handler before deriving loggers with attributes or groups:
+
+```go
+handler := otelslog.NewHandler(slog.NewJSONHandler(os.Stderr, handlerOptions))
+logger := slog.New(handler).WithGroup("request")
+```
+
+The decorator removes caller-supplied `trace_id` and `span_id` attributes case-insensitively, including nested groups
+and resolved `LogValuer` values. For a complete valid span context, including an unsampled one, it adds canonical IDs in
+the active group. Reserved group names are ignored. A decorator cannot remove attributes already bound inside an opaque
+handler. IDs are correlation metadata, not authenticated identity. Configure secret-key redaction on the underlying
+handler, for example through `slog.HandlerOptions.ReplaceAttr`.
+
+Synchronous setup and shutdown failures are returned to the caller. To handle asynchronous SDK failures, explicitly
+install a handler at the executable boundary:
+
+```go
+otel.SetErrorHandler(otelx.NewErrorHandler(logger))
+```
+
+The handler retains the original error tree for `errors.Is` and `errors.As` through its structured error value. Its
+serialized diagnostic omits native OTLP collector response bodies, partial-success messages, HTTP(S) URLs, and arbitrary
+gRPC status descriptions. It retains status codes, rejection counts, fixed transport-related facts where recognized, and
+other non-sensitive failure details. gRPC status descriptions can come from the peer or local transport and cannot
+always be distinguished, so arbitrary descriptions are omitted. Custom exporters must keep application-specific secrets
+out of errors, and the logging adapter remains responsible for any additional redaction. Services must also sanitize
+synchronous errors before logging them.
+
+## Legacy setup and migration
+
+`Config`, `DefaultConfig`, `ConfigFromEnv`, `Setup`, `SetupResult`, legacy factories/options, and existing `otelhttpx`
+hooks remain available. `Setup` and named detector registration are deprecated in favor of constructing an explicit
+resource and using `Open`. Legacy `Setup` still installs global tracing and propagation. Its defaults still select gRPC,
+plaintext, W3C plus B3 single-header propagation, and baggage. A dependency update alone does not add metrics or change
+those defaults.
+
+The compatibility fixes retain exporter-construction causes, clean up an acquired exporter if setup later fails, avoid
+constructing a real exporter when disabled, and send the configured gRPC authorization header. Returned setup errors can
+include both the primary failure and a cleanup failure.
+
+`ConfigFromEnv` continues to support the existing `TRACING_*` variables and the listed OTel overrides. For a pair below,
+the OTel variable takes precedence:
+
+- `OTEL_SDK_DISABLED` / `TRACING_DISABLED`;
+- `OTEL_SERVICE_NAME` / `TRACING_RESOURCE_SERVICE_NAME`;
+- `OTEL_RESOURCE_ATTRIBUTES` / `TRACING_RESOURCE_ATTRIBUTES`;
+- `OTEL_TRACES_SAMPLER_ARG` / `TRACING_SAMPLING_RATIO`;
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, then `TRACING_COMMUNICATION_ENDPOINT`;
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, then `OTEL_EXPORTER_OTLP_PROTOCOL`, then `TRACING_COMMUNICATION_EXPORT_METHOD`.
+
+The legacy export-method values are `grpc`, `http`, and `stdout`. Other legacy settings are `TRACING_SECURITY_INSECURE`,
+`TRACING_SECURITY_AUTHORIZATION_HEADER`, `TRACING_RESOURCE_DEPLOYMENT_ENVIRONMENT`, `TRACING_RESOURCE_DETECTORS`,
+`TRACING_PROPAGATION_BAGGAGE`, `TRACING_PROPAGATION_TRACE_CONTEXT`, `TRACING_PROPAGATION_B3_SINGLE_HEADER`, and
+`TRACING_PROPAGATION_B3_MULTIPLE_HEADER`.
+
+Moving to `Open` requires an explicit resource, exporter factories, propagation choice, and a runtime shutdown after
+application work has joined. Existing files, transports, exposure policy, service identity, baggage vocabulary, route
+names, and business metrics stay with the service. See the executable examples for the
+[runtime](runtime_example_test.go), [propagation](propagation_example_test.go),
+[HTTP adapters](otelhttpx/profile_example_test.go), and [`slog` correlation](otelslog/example_test.go). The runtime
+examples include a custom exporter, a native view, and a Prometheus registry.
