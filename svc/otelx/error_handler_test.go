@@ -3,6 +3,7 @@ package otelx
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,184 +20,31 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
-	"google.golang.org/protobuf/proto"
-
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
-func TestErrorHandlerRetainsCausesAndSanitizesExporterDiagnostics(t *testing.T) {
-	body := errors.New("body: private collector response\nsecond secret line")
-	collector := fmt.Errorf(
-		"failed to send to https://test-user:test-password@collector.example/path?token=test-secret: 400 Bad Request (%w)",
-		body,
-	)
-	network := &url.Error{
-		Op:  "Post",
-		URL: "https://test-user:test-password@collector.example/path?token=test-secret",
-		Err: errors.New("connection refused"),
-	}
-	cause := errors.Join(
-		fmt.Errorf("trace export: %w", collector),
-		fmt.Errorf("metric export: %w", network),
-		fmt.Errorf("rpc export: %w", status.Error(codes.Unavailable, "collector secret")),
-		errors.New("writer: disk full"),
-	)
+func TestErrorHandlerPassesOriginalErrorObject(t *testing.T) {
+	sentinel := errors.New("collector unavailable")
+	cause := fmt.Errorf("trace export: %w", sentinel)
 	var output bytes.Buffer
 	capture := &captureErrorHandler{
 		Handler: slog.NewJSONHandler(&output, nil),
 	}
 	NewErrorHandler(slog.New(capture)).Handle(cause)
-	if !errors.Is(capture.err, body) || !errors.Is(capture.err, network.Err) {
-		t.Fatalf("structured diagnostic lost original causes: %v", capture.err)
+	if capture.err != cause {
+		t.Fatalf("handler received %v, want original error %v", capture.err, cause)
 	}
-	var networkCause *url.Error
-	if !errors.As(capture.err, &networkCause) || networkCause != network {
-		t.Fatalf("structured diagnostic lost the typed cause: %v", capture.err)
+	if !errors.Is(capture.err, sentinel) {
+		t.Fatalf("handler lost error cause: %v", capture.err)
 	}
-	got := output.String()
-	for _, want := range []string{"trace export", "400 Bad Request", "metric export", "connection refused", "Unavailable", "disk full"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("diagnostic omitted %q: %s", want, got)
-		}
-	}
-	for _, forbidden := range []string{
-		"private collector response",
-		"second secret",
-		"test-user",
-		"test-password",
-		"token=test-secret",
-		"collector secret",
-	} {
-		if strings.Contains(got, forbidden) {
-			t.Errorf("diagnostic leaked %q: %s", forbidden, got)
-		}
-	}
-}
-
-type captureErrorHandler struct {
-	slog.Handler
-	err error
-}
-
-func (h *captureErrorHandler) Handle(ctx context.Context, record slog.Record) error {
-	record.Attrs(
-		func(attr slog.Attr) bool {
-			if attr.Key == "error" {
-				h.err, _ = attr.Value.Any().(error)
-			}
-			return true
-		},
-	)
-	return h.Handler.Handle(ctx, record)
-}
-
-func TestErrorHandlerSanitizesRealOTLPHTTPFailure(t *testing.T) {
-	collector := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = io.WriteString(w, "collector-token\nother-secret")
-			},
-		),
-	)
-	defer collector.Close()
-	r, err := Open(
-		context.Background(),
-		RuntimeConfig{
-			Enabled:  true,
-			Resource: resource.Empty(),
-			NewSpanExporter: func(ctx context.Context) (sdktrace.SpanExporter, error) {
-				return otlptracehttp.New(
-					ctx,
-					otlptracehttp.WithEndpointURL(collector.URL+"/v1/traces?api_key=private"),
-					otlptracehttp.WithRetry(
-						otlptracehttp.RetryConfig{
-							Enabled: false,
-						},
-					),
-				)
-			},
-			BatchOptions: []sdktrace.BatchSpanProcessorOption{
-				sdktrace.WithBatchTimeout(time.Hour),
-			},
-		},
-	)
-	if err != nil {
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 		t.Fatal(err)
 	}
-	_, span := r.TracerProvider.Tracer("test").Start(context.Background(), "operation")
-	span.End()
-	err = r.Shutdown(context.Background())
-	if err == nil {
-		t.Fatal("collector failure was lost")
-	}
-	var output bytes.Buffer
-	NewErrorHandler(slog.New(slog.NewJSONHandler(&output, nil))).Handle(err)
-	got := output.String()
-	if !strings.Contains(got, "400 Bad Request") || !strings.Contains(got, "traces export") {
-		t.Fatalf("diagnostic lost failure context: %s", got)
-	}
-	for _, forbidden := range []string{"collector-token", "other-secret", "api_key=private"} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("diagnostic leaked %q: %s", forbidden, got)
-		}
-	}
-}
-
-func TestErrorHandlerSanitizesRealOTLPPartialSuccess(t *testing.T) {
-	response, err := proto.Marshal(
-		&collectortrace.ExportTraceServiceResponse{
-			PartialSuccess: &collectortrace.ExportTracePartialSuccess{
-				RejectedSpans: 2,
-				ErrorMessage:  "collector-token\nprivate message",
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	collector := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/x-protobuf")
-				_, _ = w.Write(response)
-			},
-		),
-	)
-	defer collector.Close()
-	r, err := Open(
-		context.Background(),
-		RuntimeConfig{
-			Enabled:  true,
-			Resource: resource.Empty(),
-			NewSpanExporter: func(ctx context.Context) (sdktrace.SpanExporter, error) {
-				return otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(collector.URL+"/v1/traces"))
-			},
-			BatchOptions: []sdktrace.BatchSpanProcessorOption{
-				sdktrace.WithBatchTimeout(time.Hour),
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, span := r.TracerProvider.Tracer("test").Start(context.Background(), "operation")
-	span.End()
-	err = r.Shutdown(context.Background())
-	if err == nil {
-		t.Fatal("partial rejection was lost")
-	}
-	var output bytes.Buffer
-	NewErrorHandler(slog.New(slog.NewJSONHandler(&output, nil))).Handle(err)
-	got := output.String()
-	if strings.Contains(got, "collector-token") || strings.Contains(got, "private message") {
-		t.Fatalf("partial success diagnostic leaked collector response: %s", got)
-	}
-	if !strings.Contains(got, "partial success") || strings.Count(got, "2 spans rejected") != 1 {
-		t.Fatalf("partial success diagnostic must report the rejection once: %s", got)
+	if record["error"] != cause.Error() || record["operation"] != "telemetry" || record["stage"] != "sdk" {
+		t.Fatalf("unexpected log record: %v", record)
 	}
 }
 
@@ -256,7 +103,7 @@ func TestErrorHandlerKeepsJoinedOTLPPartialSuccessAndCloseFailure(t *testing.T) 
 		&collectortrace.ExportTraceServiceResponse{
 			PartialSuccess: &collectortrace.ExportTracePartialSuccess{
 				RejectedSpans: 2,
-				ErrorMessage:  "private partial response",
+				ErrorMessage:  "collector limit reached",
 			},
 		},
 	)
@@ -302,10 +149,27 @@ func TestErrorHandlerKeepsJoinedOTLPPartialSuccessAndCloseFailure(t *testing.T) 
 	var output bytes.Buffer
 	NewErrorHandler(slog.New(slog.NewJSONHandler(&output, nil))).Handle(err)
 	got := output.String()
-	if strings.Contains(got, "private partial response") || !strings.Contains(got, "2 spans rejected") ||
+	if !strings.Contains(got, "collector limit reached") || !strings.Contains(got, "2 spans rejected") ||
 		!strings.Contains(got, "stream close failed") {
-		t.Fatalf("joined diagnostic lost a cause or leaked response: %s", got)
+		t.Fatalf("joined diagnostic lost exporter details: %s", got)
 	}
+}
+
+type captureErrorHandler struct {
+	slog.Handler
+	err error
+}
+
+func (h *captureErrorHandler) Handle(ctx context.Context, record slog.Record) error {
+	record.Attrs(
+		func(attr slog.Attr) bool {
+			if attr.Key == "error" {
+				h.err, _ = attr.Value.Any().(error)
+			}
+			return true
+		},
+	)
+	return h.Handler.Handle(ctx, record)
 }
 
 type closeFailingTransport struct {

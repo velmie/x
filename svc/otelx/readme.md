@@ -267,13 +267,17 @@ install a handler at the executable boundary:
 otel.SetErrorHandler(otelx.NewErrorHandler(logger))
 ```
 
-The handler retains the original error tree for `errors.Is` and `errors.As` through its structured error value. Its
-serialized diagnostic omits native OTLP collector response bodies, partial-success messages, HTTP(S) URLs, and arbitrary
-gRPC status descriptions. It retains status codes, rejection counts, fixed transport-related facts where recognized, and
-other non-sensitive failure details. gRPC status descriptions can come from the peer or local transport and cannot
-always be distinguished, so arbitrary descriptions are omitted. Custom exporters must keep application-specific secrets
-out of errors, and the logging adapter remains responsible for any additional redaction. Services must also sanitize
-synchronous errors before logging them.
+The handler passes the original error to the logger without rewriting it. Configure the service's logging handler to
+redact well-known secret keys, for example with `slogx`. A service that needs a different summary can provide its own
+error handler. In this example, `summarize` is a service-owned function that produces the desired summary:
+
+```go
+// summarize is defined by the service.
+handler := otel.ErrorHandlerFunc(func(err error) {
+    logger.Error("telemetry failure", slog.Any("error", summarize(err)))
+})
+otel.SetErrorHandler(handler)
+```
 
 ## Legacy setup and migration
 
