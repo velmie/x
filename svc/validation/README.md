@@ -38,3 +38,27 @@ surrogates. The caller owns size limits and must discard partially populated res
 on error. Decoder causes and native validator errors are retained. Field paths and
 errors may contain input values or map keys; callers must avoid logging sensitive
 values. Error ordering is not guaranteed.
+
+## Application violations
+
+After identifying native validation failures, convert them for an application
+error at the boundary:
+
+```go
+var failures validator.ValidationErrors
+if errors.As(err, &failures) {
+    return &apperror.Error{
+        Category:   apperror.Invalid,
+        Code:       CodeInvalidRequest,
+        Message:    "request fields are invalid",
+        Violations: validation.Violations(&input, failures),
+        Cause:      err,
+    }
+}
+```
+
+`Violations` preserves failure order, configured DTO paths, `Tag()` (including
+aliases) and `Param()`. It does not copy rejected values or supply messages. The
+root must have the validated root struct's type, as a value or pointer. Paths can include map keys
+and parameters can contain rule configuration, so ensure both are safe to expose.
+An `InvalidValidationError` is a programming failure, not a field violation.

@@ -2,7 +2,10 @@ module github.com/velmie/x/svc/validation
 
 go 1.26.0
 
-require github.com/go-playground/validator/v10 v10.30.5
+require (
+	github.com/go-playground/validator/v10 v10.30.5
+	github.com/velmie/x/svc/apperror v0.1.0
+)
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
