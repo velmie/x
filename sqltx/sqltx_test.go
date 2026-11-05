@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -49,19 +51,65 @@ func TestWithTransaction_NestedTransaction(t *testing.T) {
 }
 
 func TestWithTransaction_Panic(t *testing.T) {
+	cause := &databaseError{message: "test panic"}
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{
+			name:  "error",
+			value: cause,
+		},
+		{
+			name:  "non-error",
+			value: "test panic",
+		},
+		{
+			name:  "abort handler",
+			value: http.ErrAbortHandler,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock := testDBWithMock(t)
+			wrapper := NewDefaultWrapper(db, &noopLogger{})
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+			err := wrapper.WithTransaction(context.Background(), func(context.Context) error {
+				panic(tc.value)
+			})
+			var recovered *PanicError
+			require.ErrorAs(t, err, &recovered)
+			require.Equal(t, tc.value, recovered.Value)
+			require.NotEmpty(t, recovered.Stack)
+			if panicCause, ok := tc.value.(error); ok {
+				require.Same(t, panicCause, recovered.Value)
+				require.ErrorIs(t, err, panicCause)
+				require.Equal(t, fmt.Errorf("panic recovered:\n%w\n%s", panicCause, recovered.Stack).Error(), err.Error())
+			} else {
+				require.Nil(t, errors.Unwrap(recovered))
+				require.Equal(t, fmt.Errorf("panic recovered:\n%v\n%s", tc.value, recovered.Stack).Error(), err.Error())
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestWithTransaction_NestedPanic(t *testing.T) {
 	db, mock := testDBWithMock(t)
 	wrapper := NewDefaultWrapper(db, &noopLogger{})
-
+	cause := errors.New("nested panic")
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-
 	err := wrapper.WithTransaction(context.Background(), func(ctx context.Context) error {
-		panic("test panic")
+		return wrapper.WithTransaction(ctx, func(context.Context) error {
+			panic(cause)
+		})
 	})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "panic recovered")
-	require.Contains(t, err.Error(), "test panic")
+	var recovered *PanicError
+	require.ErrorAs(t, err, &recovered)
+	require.Same(t, recovered, err)
+	require.Same(t, cause, recovered.Value)
+	require.Same(t, cause, errors.Unwrap(recovered))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

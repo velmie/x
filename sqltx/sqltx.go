@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"runtime"
 )
 
@@ -49,6 +48,9 @@ func NewDefaultWrapper(db *sql.DB, logger Logger) *DefaultWrapper {
 // Begin and Commit failures match ErrBegin or ErrCommit through errors.Is and
 // unwrap to their original causes. An error from f is returned unchanged,
 // including when a nested call reuses the transaction.
+// A panic in f is recovered after attempting rollback and returned as a *PanicError, which
+// unwraps to the panic value when it is an error. Classifiers must check for
+// *PanicError before inspecting wrapped error classifications.
 func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context.Context) error, opts ...Option) (err error) {
 	_, alreadyInTx := ctx.Value(txKey{}).(Connection)
 	// if transaction already started then just pass existing context (nested transaction)
@@ -74,14 +76,13 @@ func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context
 		if perr := recover(); perr != nil {
 			rbErr := tx.Rollback()
 			if rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				g.logger.Warn("sqltx: transaction rollback error: ", "operation", "transaction", "stage", "rollback",
+				g.logger.Warn("sqltx: transaction rollback failed", "operation", "transaction", "stage", "rollback",
 					"reason", "rollback_failed", "outcome", "failed", "trigger", "panic", "error", rbErr)
 			}
 
-			if cause, ok := perr.(error); ok {
-				err = fmt.Errorf("panic recovered:\n%w\n%s", cause, stackTrace())
-			} else {
-				err = fmt.Errorf("panic recovered:\n%v\n%s", perr, stackTrace())
+			err = &PanicError{
+				Value: perr,
+				Stack: stackTrace(),
 			}
 		}
 	}()
@@ -96,7 +97,7 @@ func (g *DefaultWrapper) WithTransaction(ctx context.Context, f func(ctx context
 	if err != nil {
 		rbErr := tx.Rollback()
 		if rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			g.logger.Warn("sqltx: transaction rollback error: ", "operation", "transaction", "stage", "rollback",
+			g.logger.Warn("sqltx: transaction rollback failed", "operation", "transaction", "stage", "rollback",
 				"reason", "rollback_failed", "outcome", "failed", "trigger", "callback", "error", rbErr)
 		}
 		return err
@@ -120,9 +121,9 @@ func (g *DefaultWrapper) Connection(ctx context.Context) Connection {
 // txKey is the context key for a shared transaction.
 type txKey struct{}
 
-func stackTrace() string {
+func stackTrace() []byte {
 	const size = 4096
 	buf := make([]byte, size)
 	n := runtime.Stack(buf, false)
-	return string(buf[:n])
+	return buf[:n]
 }

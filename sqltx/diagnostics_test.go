@@ -35,9 +35,14 @@ func TestWithTransaction_RollbackFailureRetainsCause(t *testing.T) {
 				require.Same(t, primary, err)
 			}
 			require.Len(t, logger.records, 1)
+			require.Equal(t, "sqltx: transaction rollback failed", logger.messages[0])
 			require.Same(t, rollback, logger.records[0]["error"])
 			require.Equal(t, "transaction", logger.records[0]["operation"])
 			require.Equal(t, "rollback", logger.records[0]["stage"])
+			require.Equal(t, "rollback_failed", logger.records[0]["reason"])
+			require.Equal(t, "failed", logger.records[0]["outcome"])
+			require.Equal(t, map[bool]string{false: "callback", true: "panic"}[panics], logger.records[0]["trigger"])
+			require.Len(t, logger.records[0], 6)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
@@ -57,9 +62,13 @@ func TestWithTransaction_RollbackFailureAfterCancellation(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-type rollbackLogger struct{ records []map[string]any }
+type rollbackLogger struct {
+	messages []string
+	records  []map[string]any
+}
 
-func (l *rollbackLogger) Warn(_ string, args ...any) {
+func (l *rollbackLogger) Warn(msg string, args ...any) {
+	l.messages = append(l.messages, msg)
 	fields := make(map[string]any)
 	for i := 0; i+1 < len(args); i += 2 {
 		if name, ok := args[i].(string); ok {

@@ -58,7 +58,10 @@ Both errors unwrap to the original cause, so `errors.Is` and `errors.As` also
 work for driver errors and context cancellation.
 
 ```go
+var panicErr *sqltx.PanicError
 switch {
+case errors.As(err, &panicErr):
+	// Treat the panic as an internal failure before inspecting its cause.
 case errors.Is(err, sqltx.ErrBegin):
 	// The transaction did not begin and the callback was not called.
 case errors.Is(err, sqltx.ErrCommit):
@@ -95,6 +98,29 @@ panic whose value implements `error` preserves that cause for `errors.Is/As`.
 The supplied logger must redact sensitive application data before output while
 retaining useful failure details. Begin and Commit failures are returned for the
 caller to handle and log.
+
+### Panics
+
+When a transaction callback panics, `WithTransaction` attempts to roll back and
+returns a `*sqltx.PanicError` instead of re-panicking. Its `Value` is the
+original recovered value and `Stack` contains up to 4096 bytes of the panicking
+goroutine's stack. `Error()` keeps the existing `panic recovered:\n<value>\n<stack>`
+format so logs retain the stack. The value and stack may contain sensitive data;
+the application owns redaction before logging or returning a public response.
+
+If the recovered value implements `error`, `Unwrap` exposes it through
+`errors.Is` and `errors.As`. Classifiers must check for `*sqltx.PanicError`
+first and treat it as an internal failure before checking wrapped business
+classifications. Nested calls reuse the outer transaction, which performs the
+recovery and rollback. A rollback failure is logged and does not replace the
+panic error.
+
+### Change notes
+
+- Recovered panics now return `*sqltx.PanicError` while preserving the error text
+  and wrapped cause.
+- The rollback warning message is now `sqltx: transaction rollback failed`.
+  Its structured fields are unchanged.
 
 ### Getting the Current Connection
 
