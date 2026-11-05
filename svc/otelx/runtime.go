@@ -40,11 +40,11 @@ type RuntimeConfig struct {
 	// Propagator defaults to bounded W3C propagation without baggage.
 	Propagator propagation.TextMapPropagator
 	// NewSpanExporter optionally constructs a trace exporter. On success it must
-	// return a non-nil exporter and transfers ownership to Open. On error the
+	// return a non-nil exporter and transfer ownership to Open. On error the
 	// factory releases what it acquired, and Open ignores the exporter result.
 	NewSpanExporter func(ctx context.Context) (sdktrace.SpanExporter, error)
 	// NewMetricExporter optionally constructs a metric exporter. On success it
-	// must return a non-nil exporter and transfers ownership to Open. On error
+	// must return a non-nil exporter and transfer ownership to Open. On error
 	// the factory releases what it acquired, and Open ignores the exporter result.
 	NewMetricExporter func(ctx context.Context) (sdkmetric.Exporter, error)
 	// PrometheusRegistry selects scraping instead of a periodic metric exporter.
