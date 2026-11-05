@@ -19,6 +19,9 @@ import (
 
 var detectorsReg = make(map[string]resource.Detector)
 
+// RegisterDetector adds a named detector for the legacy registry-based setup.
+//
+// Deprecated: Construct or merge resources explicitly and pass them to Open.
 func RegisterDetector(name string, detector resource.Detector) {
 	detectorsReg[name] = detector
 }
@@ -29,12 +32,7 @@ func CreateTracerProvider(
 	c *Config,
 	opts ...tracerProviderOption,
 ) (trace.TracerProvider, error) {
-	tpOpts := &tracerProviderOptions{
-		tpOpts: []sdktrace.TracerProviderOption{
-			sdktrace.WithBatcher(ex),
-			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.Sampling.Ratio))),
-		},
-	}
+	tpOpts := &tracerProviderOptions{}
 	for _, opt := range opts {
 		opt(tpOpts)
 	}
@@ -71,11 +69,12 @@ func CreateTracerProvider(
 		}
 	}
 
-	otelTpOpts := append(
-		tpOpts.tpOpts,
-		sdktrace.WithResource(res),
-	)
-
+	otelTpOpts := []sdktrace.TracerProviderOption{
+		sdktrace.WithBatcher(ex),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.Sampling.Ratio))),
+	}
+	otelTpOpts = append(otelTpOpts, tpOpts.tpOpts...)
+	otelTpOpts = append(otelTpOpts, sdktrace.WithResource(res))
 	return sdktrace.NewTracerProvider(otelTpOpts...), nil
 }
 
@@ -144,6 +143,16 @@ func otlptracegrpcOptions(c *Config) (opts []otlptracegrpc.Option) {
 	}
 	if c.Security.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+	if c.Security.AuthorizationHeader != "" {
+		opts = append(
+			opts,
+			otlptracegrpc.WithHeaders(
+				map[string]string{
+					"authorization": c.Security.AuthorizationHeader,
+				},
+			),
+		)
 	}
 
 	return opts

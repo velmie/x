@@ -3,12 +3,14 @@ package otelx
 import (
 	"context"
 	"errors"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -218,3 +220,41 @@ func (e *countingSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.R
 }
 
 func (*countingSpanExporter) Shutdown(context.Context) error { return nil }
+
+func TestOpenHandlesTypedNilFromNativeExporterFailure(t *testing.T) {
+	_, err := Open(
+		context.Background(),
+		RuntimeConfig{
+			Enabled:  true,
+			Resource: resource.Empty(),
+			NewSpanExporter: func(ctx context.Context) (sdktrace.SpanExporter, error) {
+				return otlptracegrpc.New(
+					ctx,
+					otlptracegrpc.WithEndpoint("%"),
+					otlptracegrpc.WithInsecure(),
+				)
+			},
+		},
+	)
+	var escape url.EscapeError
+	if !errors.As(err, &escape) {
+		t.Fatalf("native constructor cause lost: %v", err)
+	}
+}
+
+func TestOpenRejectsTypedNilExporterSuccess(t *testing.T) {
+	var missing *legacyExporter
+	_, err := Open(
+		context.Background(),
+		RuntimeConfig{
+			Enabled:  true,
+			Resource: resource.Empty(),
+			NewSpanExporter: func(context.Context) (sdktrace.SpanExporter, error) {
+				return missing, nil
+			},
+		},
+	)
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("typed nil accepted as an exporter: %v", err)
+	}
+}

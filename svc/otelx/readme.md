@@ -96,3 +96,12 @@ func main() {
 	otelx.Setup(context.Background(), cfg) // alternatively you may specify it directly using otelx.WithResourceDetectors(&MyCustomDetector{})
 }
 ```
+
+## Legacy setup fixes
+
+- `Setup` wraps exporter construction errors so their causes remain inspectable.
+- When setup fails after acquiring an exporter, it shuts the exporter down and returns any cleanup error with the primary error.
+- Disabled setup uses a no-op exporter without constructing a network or stdout exporter.
+- The gRPC exporter now sends the configured authorization header.
+
+`Setup` and named detector registration are deprecated. New services should construct resources explicitly and use `Open`.

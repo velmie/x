@@ -12,6 +12,8 @@ const (
 	ExportMethodStdout = "stdout"
 )
 
+// DefaultConfig contains legacy tracing defaults, including plaintext transport
+// and baggage propagation. New services should configure Open explicitly.
 var DefaultConfig = Config{
 	Communication: CommunicationConfig{
 		ExportMethod: ExportMethodGRPC,
@@ -57,7 +59,9 @@ type ResourceConfig struct {
 	// Attributes is a collection of key-value pairs providing additional
 	// information about the service (e.g., version, hostname).
 	Attributes map[string]string `json:"attributes" mapstructure:"attributes"`
-	// Detectors is a list of detector names
+	// Detectors names entries in the legacy detector registry.
+	//
+	// Deprecated: Construct a native resource with detectors and pass it to Open.
 	Detectors []string `json:"detectors" mapstructure:"detectors"`
 }
 

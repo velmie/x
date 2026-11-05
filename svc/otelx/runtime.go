@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
@@ -129,7 +130,7 @@ func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("create span exporter: %w", err), closeSpanExporter(ctx, spanExporter))
 		}
-		if spanExporter == nil {
+		if isNilExporter(spanExporter) {
 			return nil, fmt.Errorf("NewSpanExporter returned nil: %w", ErrInvalidConfig)
 		}
 	}
@@ -142,7 +143,7 @@ func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 				closeSpanExporter(ctx, spanExporter),
 			)
 		}
-		if metricExporter == nil {
+		if isNilExporter(metricExporter) {
 			return nil, errors.Join(
 				fmt.Errorf("NewMetricExporter returned nil: %w", ErrInvalidConfig),
 				closeSpanExporter(ctx, spanExporter),
@@ -276,7 +277,7 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 }
 
 func closeSpanExporter(ctx context.Context, exporter sdktrace.SpanExporter) error {
-	if exporter == nil {
+	if isNilExporter(exporter) {
 		return nil
 	}
 	if err := exporter.Shutdown(context.WithoutCancel(ctx)); err != nil {
@@ -286,11 +287,26 @@ func closeSpanExporter(ctx context.Context, exporter sdktrace.SpanExporter) erro
 }
 
 func closeMetricExporter(ctx context.Context, exporter sdkmetric.Exporter) error {
-	if exporter == nil {
+	if isNilExporter(exporter) {
 		return nil
 	}
 	if err := exporter.Shutdown(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("cleanup metric exporter: %w", err)
 	}
 	return nil
+}
+
+// Native exporter constructors can return a typed nil alongside an error after
+// conversion to an exporter interface. Do not call methods on that nil value.
+func isNilExporter(exporter any) bool {
+	if exporter == nil {
+		return true
+	}
+	value := reflect.ValueOf(exporter)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

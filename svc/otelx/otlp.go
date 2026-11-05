@@ -2,6 +2,7 @@ package otelx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/otel"
@@ -12,18 +13,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Setup initializes OpenTelemetry with specified configuration and optional overrides.
-// It returns a SetupResult containing initialized components or an error if initialization fails.
-// The function allows overriding default exporter and propagator settings using options.
+// Setup initializes legacy tracing, installs its provider and propagator as
+// globals, and returns the initialized components. The legacy ConfigFromEnv
+// defaults and exporter options remain unchanged.
 //
-// Parameters:
-// - ctx: Context for initialization.
-// - c: Configuration for OpenTelemetry.
-// - op: Optional functions to modify the default settings of OpenTelemetry.
-//
-// Returns:
-// - A pointer to SetupResult containing initialized components.
-// - An error if the initialization fails.
+// Deprecated: Use Open with an explicit resource and exporter factories. Open
+// returns a runtime that owns shutdown and does not install global providers.
 func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, error) {
 	opts := &otlpOptions{}
 	for _, o := range op {
@@ -31,15 +26,13 @@ func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, erro
 	}
 	var err error
 	exporter := opts.exporter
-	if exporter == nil {
-		exporter, err = CreateExporter(ctx, c)
-		if err != nil {
-			return nil, fmt.Errorf("cannot create exporter: %s", err)
-		}
-	}
-
 	if c.Disabled {
 		exporter = NoopExporter{}
+	} else if exporter == nil {
+		exporter, err = CreateExporter(ctx, c)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("cannot create exporter: %w", err), closeSpanExporter(ctx, exporter))
+		}
 	}
 
 	propagator := opts.propagator
@@ -57,7 +50,7 @@ func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, erro
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("cannot create tracer provider: %w", err)
+		return nil, errors.Join(fmt.Errorf("cannot create tracer provider: %w", err), closeSpanExporter(ctx, exporter))
 	}
 
 	otel.SetTracerProvider(tp)
@@ -73,9 +66,12 @@ func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, erro
 
 // SetupResult contains the components resulting from setting up OpenTelemetry.
 type SetupResult struct {
+	// TracerProvider is the legacy provider installed by Setup.
 	TracerProvider trace.TracerProvider
-	Exporter       sdktrace.SpanExporter
-	Propagator     propagation.TextMapPropagator
+	// Exporter is the exporter used by the provider.
+	Exporter sdktrace.SpanExporter
+	// Propagator is the legacy propagator installed by Setup.
+	Propagator propagation.TextMapPropagator
 }
 
 // WithExporter is an option to provide a custom SpanExporter for OpenTelemetry setup.
@@ -117,12 +113,14 @@ func WithResourceAttributes(attrs ...attribute.KeyValue) otlpOption {
 	}
 }
 
+// WithTracerProviderOptions adds native options to the legacy tracer provider.
 func WithTracerProviderOptions(toOpts ...sdktrace.TracerProviderOption) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.tpOpts = append(opts.tpOpts, toOpts...)
 	}
 }
 
+// WithResourceDetectors adds native resource detectors to legacy Setup.
 func WithResourceDetectors(detector ...resource.Detector) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.resourceDetectors = append(opts.resourceDetectors, detector...)
