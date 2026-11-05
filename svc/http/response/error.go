@@ -1,6 +1,8 @@
 package response
 
 const (
+	// ErrCodeMethodNotAllowed identifies an unsupported request method.
+	ErrCodeMethodNotAllowed = "METHOD_NOT_ALLOWED"
 	// ErrCodeNotFound is the error code corresponding to the ErrNotFound error.
 	ErrCodeNotFound = "NOT_FOUND"
 	// ErrCodeInvalidRequestParameter is the error code used when a request parameter is invalid.

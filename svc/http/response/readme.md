@@ -42,3 +42,9 @@ It omits the body for HEAD and returns encoding and write failures. Headers and
 status may already have been sent when encoding or writing fails. It does not log
 or retry. Services can construct `response.Errors` and call `WriteErrors` directly
 for HTTP-specific contracts such as conditional requests.
+
+`NewStatusRecorder` observes the final status of a writer without buffering its
+body. Informational responses do not commit the status, except for 101. The first
+body write or flush commits an implicit 200. Use `http.ResponseController` to
+access optional writer operations through the recorder. A recorder is local to
+one request and is not safe for concurrent writes.
