@@ -94,7 +94,7 @@ type Runtime struct {
 func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	propagator := cfg.Propagator
 	if propagator == nil {
-		propagator = defaultPropagation{}
+		propagator = newDefaultPropagation()
 	}
 	r := &Runtime{
 		TracerProvider: tracenoop.NewTracerProvider(),
