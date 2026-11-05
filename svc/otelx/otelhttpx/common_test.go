@@ -14,14 +14,20 @@ type mockSpan struct {
 }
 
 func newMockSpan(ctrl *gomock.Controller) *mockSpan {
-	return &mockSpan{mock_trace.NewMockSpan(ctrl), nil}
+	return &mockSpan{
+		MockSpan: mock_trace.NewMockSpan(ctrl),
+	}
 }
 
 func (s *mockSpan) relax() *mockSpan {
-	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: [16]byte{1, 2, 3, 4}, // Provide a valid TraceID
-		SpanID:  [8]byte{5, 6, 7, 8},  // Provide a valid SpanID
-	})
+	spanCtx := trace.NewSpanContext(
+		trace.SpanContextConfig{
+			TraceID: [16]byte{1, 2, 3, 4}, // Provide a valid TraceID
+			SpanID:  [8]byte{5, 6, 7, 8},  // Provide a valid SpanID
+		},
+	)
 	s.EXPECT().SpanContext().Return(spanCtx).AnyTimes()
 	return s
 }
+
+func (s *mockSpan) AddLink(trace.Link) {}
