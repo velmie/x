@@ -1,10 +1,8 @@
 package authentication
 
 import (
-	"bytes"
 	"context"
 	"crypto"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,9 +28,12 @@ type KeySourceJWKS struct {
 	reserveRefreshCapacity bool
 	refreshInterval        time.Duration
 	requestOnUnknownKID    bool
+	allowInitialFailure    bool
+	initialFailure         error
 	url                    string
 	snapshot               *jwksSnapshot
 	verificationPolicy     *JWKSVerificationPolicy
+	keyIDPolicy            JWKSKeyIDPolicy
 	policyErr              error
 	warnFunc               func(string)
 	diagnosticFunc         func(*JWKSError)
@@ -46,6 +47,7 @@ type KeySourceJWKS struct {
 	activeWork             int
 	shutdownDone           chan struct{}
 	lifetime               context.Context
+	checks                 map[*freshCheck]struct{}
 	refreshMu              sync.Mutex
 	flight                 *keyRefresh
 	cancel                 func()
@@ -57,6 +59,10 @@ type JWKSOptions struct {
 	// VerificationPolicy opts into public JWT verification keys. Nil preserves
 	// legacy acceptance. Construction copies the policy and its algorithms.
 	VerificationPolicy *JWKSVerificationPolicy
+	// KeyIDPolicy configures optional ID requirements, byte limits and duplicate
+	// rejection. Nonzero values require a VerificationPolicy. Zero preserves the
+	// existing key ID behavior. Construction copies the policy.
+	KeyIDPolicy JWKSKeyIDPolicy
 	// MaxResponseBytes limits a successful response body. Zero leaves it unlimited.
 	MaxResponseBytes int64
 	// MaxCacheAge rejects snapshots at or beyond this age. Zero leaves age unlimited.
@@ -65,7 +71,11 @@ type JWKSOptions struct {
 	ReserveRefreshCapacity bool
 	RefreshInterval        time.Duration
 	RequestOnUnknownKID    bool
-	// WarnFunc receives safe diagnostic text when DiagnosticFunc is unset.
+	// AllowInitialFetchFailure starts managed refresh after an initial fetch failure.
+	// The failure is retained and reported through the configured diagnostic callback.
+	// Zero preserves startup failure on an unsuccessful initial fetch.
+	AllowInitialFetchFailure bool
+	// WarnFunc receives diagnostic text, including cause text, when DiagnosticFunc is unset.
 	WarnFunc func(string)
 	// DiagnosticFunc receives structured refresh failures and warnings. It takes
 	// precedence over WarnFunc. Callbacks may run concurrently, execute outside
@@ -91,7 +101,15 @@ func NewKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
 	source.cancel = cancel
 	if source.refreshInterval < 0 {
 		source.refreshInterval = time.Minute
-		source.reportDiagnostic(&JWKSError{operation: "jwks_config", stage: "validate", reason: "negative_refresh_interval", field: "RefreshInterval", outcome: "defaulted"})
+		source.reportDiagnostic(
+			&JWKSError{
+				operation: "jwks_config",
+				stage:     "validate",
+				reason:    "negative_refresh_interval",
+				field:     "RefreshInterval",
+				outcome:   "defaulted",
+			},
+		)
 	}
 	source.startRefreshingKeys(ctx)
 	return source
@@ -131,8 +149,9 @@ func NewManagedKeySourceJWKS(jwksURL string, options ...*JWKSOptions) (*KeySourc
 }
 
 // Start loads the initial keys and starts periodic refresh using ctx as the
-// managed lifetime. A failed initial load can be retried. Concurrent startup
-// returns ErrKeySourceStarting. Successful repeated calls retain the original
+// managed lifetime. A failed initial load can be retried. When explicitly
+// allowed, an initial load failure starts refresh but does not establish readiness.
+// Concurrent startup returns ErrKeySourceStarting. Successful repeated calls retain the original
 // lifetime. Stop is terminal for managed sources. Legacy sources already start
 // in their constructor, so Start leaves their lifetime unchanged.
 func (k *KeySourceJWKS) Start(ctx context.Context) error {
@@ -175,13 +194,18 @@ func (k *KeySourceJWKS) Start(ctx context.Context) error {
 		err = stateErr
 	}
 	if err != nil {
-		cancel()
-		if !k.stopped {
-			k.lifetime = nil
-			k.cancel = nil
+		if !k.allowInitialFailure || k.lifecycleErrorLocked(false) != nil || ctx.Err() != nil {
+			cancel()
+			if !k.stopped {
+				k.lifetime = nil
+				k.cancel = nil
+			}
+			k.refreshMu.Unlock()
+			return err
 		}
-		k.refreshMu.Unlock()
-		return err
+		k.mu.Lock()
+		k.initialFailure = err
+		k.mu.Unlock()
 	}
 	k.started = true
 	k.activeWork++
@@ -200,7 +224,7 @@ func (k *KeySourceJWKS) FetchPublicKey(ctx context.Context, kid string) (crypto.
 // custom parsers should call it when checking tokens against that policy.
 func (k *KeySourceJWKS) FetchPublicKeyForAlgorithm(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
 	if k.verificationPolicy != nil && algorithm == "" {
-		return nil, rejectedJWK("lookup", "missing_algorithm", "header.alg", nil)
+		return nil, rejectedKey("missing_algorithm", "header.alg")
 	}
 	return k.fetchPublicKey(ctx, kid, algorithm)
 }
@@ -215,8 +239,8 @@ func (k *KeySourceJWKS) Stop() {
 }
 
 // Shutdown permanently closes the source and waits for its startup, refreshes,
-// response cleanup, and diagnostic callbacks. It does not close the shared HTTP
-// client or wait for external authentication handlers. The caller owns ctx's
+// fresh checks, response cleanup, and diagnostic callbacks. It does not close
+// the shared HTTP client or wait for external authentication handlers. The caller owns ctx's
 // deadline; a context error means work may still be finishing. Subsequent calls
 // can continue waiting. Call Shutdown outside diagnostic callbacks; callbacks
 // may use the nonblocking Stop instead.
@@ -244,6 +268,73 @@ func (k *KeySourceJWKS) Shutdown(ctx context.Context) error {
 	}
 }
 
+// Check fetches and validates a fresh usable key set without changing the cache
+// or consuming the refresh budget. Empty sets fail readiness. It does not log;
+// its caller owns diagnostics. Stop cancels active checks; Shutdown also joins them.
+// Check can be called before Start and does not establish source readiness.
+func (k *KeySourceJWKS) Check(ctx context.Context) error {
+	k.refreshMu.Lock()
+	if err := k.lifecycleErrorLocked(false); err != nil {
+		k.refreshMu.Unlock()
+		return err
+	}
+	checkCtx, cancel := context.WithCancel(ctx)
+	check := &freshCheck{
+		cancel: cancel,
+	}
+	if k.checks == nil {
+		k.checks = make(map[*freshCheck]struct{})
+	}
+	k.checks[check] = struct{}{}
+	k.activeWork++
+	k.refreshMu.Unlock()
+	defer func() {
+		cancel()
+		k.refreshMu.Lock()
+		delete(k.checks, check)
+		k.refreshMu.Unlock()
+		k.finishWork()
+	}()
+
+	keys, warning, err := k.loadKeys(checkCtx)
+	if err != nil {
+		return err
+	}
+	if err := checkCtx.Err(); err != nil {
+		if warning != nil {
+			return errors.Join(err, warning)
+		}
+		return err
+	}
+	if len(keys.keys) == 0 {
+		err = &JWKSError{
+			stage:  "validate",
+			reason: "no_verification_keys",
+			field:  "keys",
+		}
+		if warning != nil {
+			return errors.Join(err, warning)
+		}
+		return err
+	}
+	if warning != nil {
+		return warning
+	}
+	return nil
+}
+
+func (k *KeySourceJWKS) unavailableWithoutSnapshot(cause error) error {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	if !k.lastSuccess.IsZero() {
+		return nil
+	}
+	if k.initialFailure == nil {
+		return fmt.Errorf("key set unavailable: %w", errors.Join(ErrKeySetExpired, cause))
+	}
+	return fmt.Errorf("key set unavailable: %w", errors.Join(k.initialFailure, cause))
+}
+
 func (k *KeySourceJWKS) fetchPublicKey(ctx context.Context, kid, algorithm string) (crypto.PublicKey, error) {
 	select {
 	default:
@@ -259,6 +350,11 @@ func (k *KeySourceJWKS) fetchPublicKey(ctx context.Context, kid, algorithm strin
 	}
 
 	if !k.requestOnUnknownKID {
+		if k.managed && k.allowInitialFailure {
+			if err := k.unavailableWithoutSnapshot(nil); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrKeyNotFound
 	}
 
@@ -267,6 +363,11 @@ func (k *KeySourceJWKS) fetchPublicKey(ctx context.Context, kid, algorithm strin
 			return nil, errors.Join(lifecycleErr, err)
 		}
 		if errors.Is(err, ErrJWKSRateLimited) {
+			if k.managed && k.allowInitialFailure {
+				if unavailable := k.unavailableWithoutSnapshot(err); unavailable != nil {
+					return nil, unavailable
+				}
+			}
 			return nil, &classifiedError{category: ErrKeyNotFound, cause: err}
 		}
 		return nil, fmt.Errorf("failed to request keys: %w", err)
@@ -293,10 +394,23 @@ func (k *KeySourceJWKS) stopLocked() {
 		k.flight.abandoned = true
 		k.flight.cancel()
 	}
+	for check := range k.checks {
+		check.cancel()
+	}
 }
 
 func newKeySourceJWKS(jwksURL string, options ...*JWKSOptions) *KeySourceJWKS {
-	source := &KeySourceJWKS{client: http.DefaultClient, refreshInterval: time.Minute, url: jwksURL, snapshot: &jwksSnapshot{keys: make(map[string]crypto.PublicKey)}, rl: new(rateLimiter), now: time.Now, shutdownDone: make(chan struct{})}
+	source := &KeySourceJWKS{
+		client:          http.DefaultClient,
+		refreshInterval: time.Minute,
+		url:             jwksURL,
+		snapshot: &jwksSnapshot{
+			keys: make(map[string]crypto.PublicKey),
+		},
+		rl:           new(rateLimiter),
+		now:          time.Now,
+		shutdownDone: make(chan struct{}),
+	}
 	if len(options) > 0 {
 		options[0].apply(source)
 	}
@@ -309,19 +423,20 @@ func (k *KeySourceJWKS) cachedKey(kid, algorithm string) (crypto.PublicKey, bool
 	}
 	k.mu.RLock()
 	defer k.mu.RUnlock()
-	if k.maxCacheAge > 0 && (k.lastSuccess.IsZero() || k.now().Sub(k.lastSuccess) >= k.maxCacheAge) {
+	awaitingInitialSnapshot := k.managed && k.allowInitialFailure && k.lastSuccess.IsZero()
+	if k.maxCacheAge > 0 && !awaitingInitialSnapshot && (k.lastSuccess.IsZero() || k.now().Sub(k.lastSuccess) >= k.maxCacheAge) {
 		return nil, false, fmt.Errorf("%w: operation=jwks_cache stage=validate reason=key_set_expired outcome=rejected", ErrKeySetExpired)
 	}
-	if k.verificationPolicy != nil && k.lastSuccess.IsZero() {
+	if k.verificationPolicy != nil && k.lastSuccess.IsZero() && !awaitingInitialSnapshot {
 		return nil, false, rejectedJWK("lookup", "key_set_unavailable", "keys", nil)
 	}
 	key, found := k.snapshot.keys[kid]
 	if found && algorithm != "" && k.verificationPolicy != nil && k.snapshot.algorithms[kid] != algorithm {
-		return nil, false, rejectedJWK("lookup", "algorithm_mismatch", "header.alg", nil)
+		return nil, false, rejectedKey("algorithm_mismatch", "header.alg")
 	}
 	if !found {
 		if _, rejected := k.snapshot.rejected[kid]; rejected {
-			return nil, false, rejectedJWK("lookup", "key_not_for_verification", "header.kid", nil)
+			return nil, false, rejectedKey("key_not_for_verification", "header.kid")
 		}
 	}
 	return key, found, nil
@@ -354,14 +469,24 @@ func (k *KeySourceJWKS) lifecycleErrorLocked(requireStarted bool) error {
 
 // apply applies options to key source
 func (o *JWKSOptions) apply(source *KeySourceJWKS) {
+	source.keyIDPolicy = o.KeyIDPolicy
 	if o.VerificationPolicy != nil {
-		source.verificationPolicy = &JWKSVerificationPolicy{AllowedAlgorithms: append([]string(nil), o.VerificationPolicy.AllowedAlgorithms...)}
+		policy := *o.VerificationPolicy
+		policy.AllowedAlgorithms = append([]string(nil), policy.AllowedAlgorithms...)
+		source.verificationPolicy = &policy
 		source.policyErr = source.verificationPolicy.validate()
+	}
+	if source.policyErr == nil {
+		source.policyErr = source.keyIDPolicy.validate()
+	}
+	if source.policyErr == nil && o.VerificationPolicy == nil && o.KeyIDPolicy != (JWKSKeyIDPolicy{}) {
+		source.policyErr = rejectedJWK("config", "missing_verification_policy", "KeyIDPolicy", nil)
 	}
 	if o.MaxCacheAge > 0 {
 		source.maxCacheAge = o.MaxCacheAge
 	}
 	source.reserveRefreshCapacity = o.ReserveRefreshCapacity
+	source.allowInitialFailure = o.AllowInitialFetchFailure
 	if o.MaxResponseBytes > 0 {
 		source.maxResponseBytes = o.MaxResponseBytes
 	}
@@ -472,6 +597,7 @@ func (k *KeySourceJWKS) requestKeysFor(ctx context.Context, kid string, missingO
 func (k *KeySourceJWKS) refreshKeys(ctx context.Context, flight *keyRefresh) {
 	defer k.finishWork()
 	keys, warning, err := k.loadKeys(ctx)
+	operationCanceled := ctx.Err() != nil
 	if err == nil {
 		err = ctx.Err()
 	}
@@ -479,6 +605,7 @@ func (k *KeySourceJWKS) refreshKeys(ctx context.Context, flight *keyRefresh) {
 		k.mu.Lock()
 		k.snapshot = keys
 		k.lastSuccess = k.now()
+		k.initialFailure = nil
 		k.mu.Unlock()
 	}
 	flight.err = err
@@ -491,7 +618,8 @@ func (k *KeySourceJWKS) refreshKeys(ctx context.Context, flight *keyRefresh) {
 	var diagnostic *JWKSError
 	// Only cancellation of the primary operation suppresses its diagnostic.
 	// A secondary close failure may itself match context.Canceled.
-	if errors.As(flight.err, &diagnostic) && !errors.Is(diagnostic.cause, context.Canceled) {
+	if errors.As(flight.err, &diagnostic) &&
+		(!errors.Is(diagnostic.cause, context.Canceled) || k.managed && k.allowInitialFailure && !operationCanceled) {
 		k.reportDiagnostic(diagnostic)
 	} else if warning != nil {
 		k.reportDiagnostic(warning)
@@ -543,19 +671,7 @@ func (k *KeySourceJWKS) loadKeys(ctx context.Context) (keys *jwksSnapshot, warni
 	if k.maxResponseBytes > 0 && int64(len(body)) > k.maxResponseBytes {
 		return nil, nil, &JWKSError{stage: "read", reason: "response_too_large"}
 	}
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		var syntaxError *json.SyntaxError
-		if errors.As(err, &syntaxError) {
-			return nil, nil, &JWKSError{stage: "decode", reason: "invalid_json", cause: err}
-		}
-		return nil, nil, &JWKSError{stage: "validate", reason: "invalid_envelope", cause: err}
-	}
-	rawKeys := bytes.TrimSpace(envelope["keys"])
-	if len(rawKeys) == 0 || rawKeys[0] != '[' {
-		return nil, nil, &JWKSError{stage: "validate", reason: "invalid_envelope", field: "keys"}
-	}
-	keys, err = decodeJWKSSnapshot(rawKeys, k.verificationPolicy)
+	keys, err = decodeJWKSDocument(body, k.verificationPolicy, k.keyIDPolicy, false)
 	return keys, nil, err
 }
 
@@ -565,6 +681,10 @@ func (k *KeySourceJWKS) reportDiagnostic(diagnostic *JWKSError) {
 	} else if k.warnFunc != nil {
 		k.warnFunc(diagnostic.Error())
 	}
+}
+
+type freshCheck struct {
+	cancel context.CancelFunc
 }
 
 // keyRefresh publishes err by closing done. It is never reused.

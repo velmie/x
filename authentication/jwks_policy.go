@@ -24,10 +24,56 @@ type JWKSVerificationPolicy struct {
 	AllowedAlgorithms []string
 }
 
+// JWKSKeyIDPolicy controls key ID checks for a verification source. Its zero
+// value preserves the existing managed-source behavior. Static sources always
+// reject duplicate IDs before filtering key usage.
+type JWKSKeyIDPolicy struct {
+	// Required rejects keys without a nonempty kid.
+	Required bool
+	// MaxBytes limits kid length; zero leaves its length unlimited.
+	MaxBytes int
+	// RejectDuplicates rejects repeated nonempty key IDs before filtering key
+	// usage in managed sources. Static sources always apply this rule.
+	RejectDuplicates bool
+}
+
 type jwksSnapshot struct {
 	keys       map[string]crypto.PublicKey
 	algorithms map[string]string
 	rejected   map[string]struct{}
+}
+
+func decodeJWKSDocument(
+	body []byte,
+	policy *JWKSVerificationPolicy,
+	keyIDs JWKSKeyIDPolicy,
+	requireAll bool,
+) (*jwksSnapshot, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		var syntaxError *json.SyntaxError
+		if errors.As(err, &syntaxError) {
+			return nil, &JWKSError{
+				stage:  "decode",
+				reason: "invalid_json",
+				cause:  err,
+			}
+		}
+		return nil, &JWKSError{
+			stage:  "validate",
+			reason: "invalid_envelope",
+			cause:  err,
+		}
+	}
+	rawKeys := bytes.TrimSpace(envelope["keys"])
+	if len(rawKeys) == 0 || rawKeys[0] != '[' {
+		return nil, &JWKSError{
+			stage:  "validate",
+			reason: "invalid_envelope",
+			field:  "keys",
+		}
+	}
+	return decodeJWKSSnapshot(rawKeys, policy, keyIDs, requireAll)
 }
 
 func (p *JWKSVerificationPolicy) validate() error {
@@ -44,7 +90,19 @@ func (p *JWKSVerificationPolicy) validate() error {
 	return nil
 }
 
-func decodeJWKSSnapshot(rawKeys []byte, policy *JWKSVerificationPolicy) (snapshot *jwksSnapshot, err error) {
+func (p JWKSKeyIDPolicy) validate() error {
+	if p.MaxBytes < 0 {
+		return rejectedJWK("config", "negative_key_id_limit", "KeyIDPolicy.MaxBytes", nil)
+	}
+	return nil
+}
+
+func decodeJWKSSnapshot(
+	rawKeys []byte,
+	policy *JWKSVerificationPolicy,
+	keyIDs JWKSKeyIDPolicy,
+	requireAll bool,
+) (snapshot *jwksSnapshot, err error) {
 	keyIndex := -1
 	defer func() {
 		if diagnostic, ok := err.(*JWKSError); ok && keyIndex >= 0 {
@@ -67,6 +125,7 @@ func decodeJWKSSnapshot(rawKeys []byte, policy *JWKSVerificationPolicy) (snapsho
 		snapshot.algorithms = make(map[string]string)
 		snapshot.rejected = make(map[string]struct{})
 	}
+	seenIDs := make(map[string]struct{})
 	for i, raw := range keys {
 		keyIndex = i
 		if policy == nil {
@@ -89,6 +148,18 @@ func decodeJWKSSnapshot(rawKeys []byte, policy *JWKSVerificationPolicy) (snapsho
 		if err != nil {
 			return nil, err
 		}
+		if keyIDs.Required && kid == "" {
+			return nil, rejectedJWK("validate", "missing_key_id", "kid", nil)
+		}
+		if keyIDs.MaxBytes > 0 && len(kid) > keyIDs.MaxBytes {
+			return nil, rejectedJWK("validate", "key_id_too_long", "kid", nil)
+		}
+		if kid != "" && (requireAll || keyIDs.RejectDuplicates) {
+			if _, exists := seenIDs[kid]; exists {
+				return nil, rejectedJWK("validate", "duplicate_key_id", "kid", nil)
+			}
+			seenIDs[kid] = struct{}{}
+		}
 		use, err := jwkString(fields, "use")
 		if err != nil {
 			return nil, err
@@ -101,7 +172,21 @@ func decodeJWKSSnapshot(rawKeys []byte, policy *JWKSVerificationPolicy) (snapsho
 		if err != nil {
 			return nil, err
 		}
-		if !eligible || algorithm != "" && !allowedJWKAlgorithm(policy, algorithm) {
+		if !eligible {
+			if requireAll {
+				field := "use"
+				if fields["key_ops"] != nil {
+					field = "key_ops"
+				}
+				return nil, rejectedJWK("validate", "key_not_for_verification", field, nil)
+			}
+			snapshot.rejected[kid] = struct{}{}
+			continue
+		}
+		if algorithm != "" && !allowedJWKAlgorithm(policy, algorithm) {
+			if requireAll {
+				return nil, rejectedJWK("validate", "algorithm_not_allowed", "alg", nil)
+			}
 			snapshot.rejected[kid] = struct{}{}
 			continue
 		}
@@ -127,6 +212,9 @@ func decodeJWKSSnapshot(rawKeys []byte, policy *JWKSVerificationPolicy) (snapsho
 				}
 			}
 			if algorithm == "" {
+				if requireAll {
+					return nil, rejectedJWK("validate", "no_matching_algorithm", "alg", nil)
+				}
 				snapshot.rejected[kid] = struct{}{}
 				continue
 			}
@@ -298,4 +386,13 @@ func matchesKeyAlgorithm(key crypto.PublicKey, algorithm string) bool {
 
 func rejectedJWK(stage, reason, field string, cause error) error {
 	return &JWKSError{stage: stage, reason: reason, field: field, cause: errors.Join(ErrJWKSKeyRejected, cause)}
+}
+
+func rejectedKey(reason, field string) error {
+	return &JWKSError{
+		stage:  "lookup",
+		reason: reason,
+		field:  field,
+		cause:  errors.Join(ErrKeyRejected, ErrJWKSKeyRejected),
+	}
 }

@@ -23,6 +23,8 @@ const (
 	ErrJWKSRateLimited = Error("rate limit exceeded")
 	// ErrJWKSKeyRejected means the verification policy rejected a key or key set.
 	ErrJWKSKeyRejected = Error("JWKS key rejected")
+	// ErrKeyRejected identifies a selected key prohibited for this verification.
+	ErrKeyRejected = Error("verification key rejected")
 	// ErrKeySourceNotStarted means a managed source has not completed startup.
 	ErrKeySourceNotStarted = Error("key source not started")
 	// ErrKeySourceStarting means another Start call is already loading initial keys.

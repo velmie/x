@@ -6,9 +6,8 @@ import (
 )
 
 // JWKSError describes a JWKS failure or warning using bounded diagnostic fields.
-// Error excludes input values and underlying error text. errors.Is and errors.As
-// can inspect causes, which may contain credentials, URLs, or response data and
-// must not be logged without redaction. DiagnosticFunc receives these events.
+// Error includes the text of the primary and any secondary close cause.
+// The causes remain available to errors.Is and errors.As. DiagnosticFunc receives these events.
 type JWKSError struct {
 	operation  string
 	stage      string
@@ -57,8 +56,7 @@ func (e *JWKSError) Outcome() string {
 // HTTPStatus returns the rejected HTTP status, or zero for other failures.
 func (e *JWKSError) HTTPStatus() int { return e.status }
 
-// Error returns safe operation, stage, reason, outcome, field, and optional HTTP
-// status and secondary close-failure indication.
+// Error describes the operation, failure, and any primary or close cause.
 func (e *JWKSError) Error() string {
 	message := "operation=" + e.Operation() + " stage=" + e.Stage() + " reason=" + e.Reason() + " outcome=" + e.Outcome()
 	if e.status != 0 {
@@ -70,11 +68,17 @@ func (e *JWKSError) Error() string {
 	if e.closeCause != nil {
 		message += " close_reason=body_close_failed"
 	}
+	if e.cause != nil {
+		message += ": " + e.cause.Error()
+	}
+	if e.closeCause != nil {
+		message += "; close: " + e.closeCause.Error()
+	}
 	return message
 }
 
-// Unwrap exposes underlying causes for inspection, including secondary body
-// close failures. Their text may be sensitive and must not be logged directly.
+// Unwrap exposes the primary and any secondary close cause to errors.Is and errors.As.
+// Their text is included in Error.
 func (e *JWKSError) Unwrap() error {
 	if e.closeCause != nil {
 		return errors.Join(e.cause, e.closeCause)

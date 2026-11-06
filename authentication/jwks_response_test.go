@@ -11,7 +11,15 @@ import (
 )
 
 func TestJWKSInvalidResponsePreservesKeys(t *testing.T) {
-	for _, body := range []string{`{}`, `null`, `{"keys":null}`, `{"keys":{}}`, `[]`, `{"keys":`, `{"keys":[{"kty":"unsupported","kid":"sensitive"}]}`} {
+	for _, body := range []string{
+		`{}`,
+		`null`,
+		`{"keys":null}`,
+		`{"keys":{}}`,
+		`[]`,
+		`{"keys":`,
+		`{"keys":[{"kty":"unsupported","kid":"sensitive"}]}`,
+	} {
 		t.Run(body, func(t *testing.T) {
 			source := responseTestSource(t)
 			source.client = concurrencyClient(func(*http.Request) (*http.Response, error) { return responseWithBody(body), nil })
@@ -43,7 +51,7 @@ func TestJWKSValidRotationRemovesAbsentKeys(t *testing.T) {
 	}
 }
 
-func TestJWKSDiagnosticsExcludeSensitiveValues(t *testing.T) {
+func TestJWKSDiagnosticsPreserveCauseText(t *testing.T) {
 	dependency := &responseDependencyError{message: "sensitive-token\nforged-log"}
 	tests := []struct {
 		name, stage, reason, body string
@@ -79,18 +87,19 @@ func TestJWKSDiagnosticsExcludeSensitiveValues(t *testing.T) {
 				t.Fatal("expected failure")
 			}
 			message := err.Error()
-			for _, forbidden := range []string{"sensitive-token", "forged-log", "username", "password", "?token=", "\n"} {
-				if strings.Contains(message, forbidden) {
-					t.Errorf("unsafe diagnostic %q", message)
-				}
-			}
 			for _, field := range []string{"operation=jwks_refresh", "stage=" + tc.stage, "reason=" + tc.reason, "outcome=failed"} {
 				if !strings.Contains(message, field) {
 					t.Errorf("missing %q in %q", field, message)
 				}
 			}
-			if tc.failure != nil && !errors.Is(err, tc.failure) {
+			if tc.failure != nil && (!errors.Is(err, tc.failure) || !strings.Contains(message, tc.failure.Error())) {
 				t.Errorf("original cause lost: %v", err)
+			}
+			if tc.name == "key decode" && !strings.Contains(message, "unknown json web key type 'sensitive-token'") {
+				t.Errorf("key parsing cause text lost: %v", err)
+			}
+			if tc.name == "status" && strings.Contains(message, tc.body) {
+				t.Errorf("status error included unread response body: %v", err)
 			}
 			if tc.failure == dependency {
 				var typed *responseDependencyError
@@ -117,6 +126,72 @@ func TestJWKSRejectsStatusBeforeReadingBody(t *testing.T) {
 	}
 }
 
+func TestJWKSStatusCauseDoesNotContainResponseOrAuthorization(t *testing.T) {
+	const body = "fixture response body"
+	const authorization = "Bearer fixture-token"
+	read := 0
+	source := responseTestSource(t)
+	source.client = concurrencyClient(
+		func(req *http.Request) (*http.Response, error) {
+			req.Header.Set("Authorization", authorization)
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body: io.NopCloser(
+					&responseCountingReader{
+						Reader: strings.NewReader(body),
+						count:  &read,
+					},
+				),
+			}, nil
+		},
+	)
+	_, _, err := source.loadKeys(context.Background())
+	var diagnostic *JWKSError
+	if !errors.As(err, &diagnostic) || diagnostic.HTTPStatus() != http.StatusServiceUnavailable || errors.Unwrap(diagnostic) != nil {
+		t.Fatalf("unexpected status diagnostic: %v", err)
+	}
+	if read != 0 || strings.Contains(err.Error(), body) || strings.Contains(err.Error(), authorization) {
+		t.Fatalf("status diagnostic contains request or response data: %v", err)
+	}
+}
+
+func TestJWKSClientCausePreservesAuthorizationText(t *testing.T) {
+	const authorization = "Bearer fixture-token"
+	var cause error
+	source := responseTestSource(t)
+	source.client = concurrencyClient(
+		func(req *http.Request) (*http.Response, error) {
+			req.Header.Set("Authorization", authorization)
+			cause = errors.New("client reported Authorization: " + req.Header.Get("Authorization"))
+			return nil, cause
+		},
+	)
+	_, _, err := source.loadKeys(context.Background())
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("client cause lost: %v", err)
+	}
+}
+
+func TestJWKSReadCausePreservesResponseText(t *testing.T) {
+	const body = `{"keys":[{"kty":"fixture"}]}`
+	cause := errors.New("reader reported response: " + body)
+	source := responseTestSource(t)
+	source.client = concurrencyClient(
+		func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: responseFailureBody{
+					err: cause,
+				},
+			}, nil
+		},
+	)
+	_, _, err := source.loadKeys(context.Background())
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), body) {
+		t.Fatalf("reader cause lost: %v", err)
+	}
+}
+
 func TestJWKSResponseSizeLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -132,13 +207,30 @@ func TestJWKSResponseSizeLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			initial := true
 			var bytesRead int
-			source := NewKeySourceJWKS("https://example.test/keys", &JWKSOptions{RefreshInterval: time.Hour, MaxResponseBytes: tc.limit, Client: concurrencyClient(func(*http.Request) (*http.Response, error) {
-				if initial {
-					initial = false
-					return concurrencyResponse(), nil
-				}
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(&responseCountingReader{Reader: strings.NewReader(tc.body), count: &bytesRead})}, nil
-			})})
+			source := NewKeySourceJWKS(
+				"https://example.test/keys",
+				&JWKSOptions{
+					RefreshInterval:  time.Hour,
+					MaxResponseBytes: tc.limit,
+					Client: concurrencyClient(
+						func(*http.Request) (*http.Response, error) {
+							if initial {
+								initial = false
+								return concurrencyResponse(), nil
+							}
+							return &http.Response{
+								StatusCode: 200,
+								Body: io.NopCloser(
+									&responseCountingReader{
+										Reader: strings.NewReader(tc.body),
+										count:  &bytesRead,
+									},
+								),
+							}, nil
+						},
+					),
+				},
+			)
 			defer source.Stop()
 			err := source.requestKeys(context.Background())
 			if (err != nil) != tc.wantError {
@@ -157,11 +249,26 @@ func TestJWKSResponseSizeLimit(t *testing.T) {
 	}
 }
 
-func TestJWKSRefreshWarningsAreSafeAndOncePerFailure(t *testing.T) {
+func TestJWKSStatusWarningsAreOncePerFailure(t *testing.T) {
 	warnings := make(chan string, 4)
-	source := NewKeySourceJWKS("https://user:secret@example.test/keys?secret=value", &JWKSOptions{RefreshInterval: time.Hour, WarnFunc: func(message string) { warnings <- message }, Client: concurrencyClient(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 503, Body: responseFailureBody{err: errors.New("secret"), closeErr: context.Canceled}}, nil
-	})})
+	source := NewKeySourceJWKS(
+		"https://user:secret@example.test/keys?secret=value",
+		&JWKSOptions{
+			RefreshInterval: time.Hour,
+			WarnFunc:        func(message string) { warnings <- message },
+			Client: concurrencyClient(
+				func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: 503,
+						Body: responseFailureBody{
+							err:      errors.New("secret"),
+							closeErr: context.Canceled,
+						},
+					}, nil
+				},
+			),
+		},
+	)
 	defer source.Stop()
 	select {
 	case message := <-warnings:
@@ -189,16 +296,30 @@ func TestJWKSRefreshWarningsAreSafeAndOncePerFailure(t *testing.T) {
 	}
 }
 
-func TestJWKSCloseWarningExcludesCause(t *testing.T) {
+func TestJWKSCloseWarningIncludesCause(t *testing.T) {
 	warnings := make(chan string, 1)
-	source := NewKeySourceJWKS("https://example.test/keys", &JWKSOptions{RefreshInterval: time.Hour, WarnFunc: func(message string) { warnings <- message }, Client: concurrencyClient(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: responseCloseFailureBody{Reader: strings.NewReader(concurrencyJWKS)}}, nil
-	})})
+	source := NewKeySourceJWKS(
+		"https://example.test/keys",
+		&JWKSOptions{
+			RefreshInterval: time.Hour,
+			WarnFunc:        func(message string) { warnings <- message },
+			Client: concurrencyClient(
+				func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: 200,
+						Body: responseCloseFailureBody{
+							Reader: strings.NewReader(concurrencyJWKS),
+						},
+					}, nil
+				},
+			),
+		},
+	)
 	defer source.Stop()
 	select {
 	case message := <-warnings:
-		if message != "operation=jwks_refresh stage=close reason=body_close_failed outcome=warning" {
-			t.Fatalf("unsafe warning %q", message)
+		if message != "operation=jwks_refresh stage=close reason=body_close_failed outcome=warning: sensitive-close\nforged-log" {
+			t.Fatalf("warning lost cause: %q", message)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("missing close warning")
@@ -206,7 +327,11 @@ func TestJWKSCloseWarningExcludesCause(t *testing.T) {
 }
 
 func TestJWKSRateLimitErrorExcludesKeyID(t *testing.T) {
-	options := &JWKSOptions{RefreshInterval: time.Hour, RequestOnUnknownKID: true, Client: concurrencyClient(func(*http.Request) (*http.Response, error) { return concurrencyResponse(), nil })}
+	options := &JWKSOptions{
+		RefreshInterval:     time.Hour,
+		RequestOnUnknownKID: true,
+		Client:              concurrencyClient(func(*http.Request) (*http.Response, error) { return concurrencyResponse(), nil }),
+	}
 	options.SetRefreshRateLimit(1, time.Hour)
 	source := NewKeySourceJWKS("https://example.test/keys", options)
 	defer source.Stop()
@@ -218,7 +343,13 @@ func TestJWKSRateLimitErrorExcludesKeyID(t *testing.T) {
 
 func responseTestSource(t *testing.T) *KeySourceJWKS {
 	t.Helper()
-	source := NewKeySourceJWKS("https://example.test/keys", &JWKSOptions{RefreshInterval: time.Hour, Client: concurrencyClient(func(*http.Request) (*http.Response, error) { return concurrencyResponse(), nil })})
+	source := NewKeySourceJWKS(
+		"https://example.test/keys",
+		&JWKSOptions{
+			RefreshInterval: time.Hour,
+			Client:          concurrencyClient(func(*http.Request) (*http.Response, error) { return concurrencyResponse(), nil }),
+		},
+	)
 	t.Cleanup(source.Stop)
 	return source
 }

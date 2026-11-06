@@ -14,6 +14,28 @@ import (
 	"time"
 )
 
+func TestJWKSErrorIncludesPrimaryAndCloseCauseText(t *testing.T) {
+	primary := errors.New("read failure")
+	closeCause := errors.New("close failure")
+	diagnostic := &JWKSError{
+		stage:      "read",
+		reason:     "body_read_failed",
+		cause:      primary,
+		closeCause: closeCause,
+	}
+	expected := "operation=jwks_refresh stage=read reason=body_read_failed outcome=failed" +
+		" close_reason=body_close_failed: read failure; close: close failure"
+	if diagnostic.Error() != expected || !errors.Is(diagnostic, primary) || !errors.Is(diagnostic, closeCause) {
+		t.Fatalf("diagnostic = %q", diagnostic.Error())
+	}
+	diagnostic.cause = nil
+	expected = "operation=jwks_refresh stage=read reason=body_read_failed outcome=failed" +
+		" close_reason=body_close_failed; close: close failure"
+	if diagnostic.Error() != expected || !errors.Is(diagnostic, closeCause) {
+		t.Fatalf("close-only diagnostic = %q", diagnostic.Error())
+	}
+}
+
 func TestJWKSErrorPreservesEndpointCause(t *testing.T) {
 	_, err := NewManagedKeySourceJWKS("https://user:secret@example.test/%zz?token=sensitive")
 	var diagnostic *JWKSError
@@ -21,10 +43,13 @@ func TestJWKSErrorPreservesEndpointCause(t *testing.T) {
 	if !errors.As(err, &diagnostic) || !errors.As(err, &escape) {
 		t.Fatalf("endpoint diagnostic or URL cause lost: %v", err)
 	}
-	if diagnostic.Operation() != "jwks_config" || diagnostic.Stage() != "config" || diagnostic.Reason() != "invalid_endpoint" || diagnostic.Outcome() != "failed" || diagnostic.HTTPStatus() != 0 {
+	if diagnostic.Operation() != "jwks_config" || diagnostic.Stage() != "config" || diagnostic.Reason() != "invalid_endpoint" ||
+		diagnostic.Outcome() != "failed" || diagnostic.HTTPStatus() != 0 {
 		t.Fatalf("unexpected endpoint diagnostic: %v", diagnostic)
 	}
-	assertSafeJWKSError(t, err)
+	if !strings.Contains(err.Error(), escape.Error()) {
+		t.Fatalf("endpoint cause text lost: %v", err)
+	}
 }
 
 func TestJWKSErrorPreservesRateLimitAndCategory(t *testing.T) {
@@ -47,7 +72,9 @@ func TestJWKSErrorPreservesRateLimitAndCategory(t *testing.T) {
 	if got := awaitJWKSDiagnostic(t, diagnostics); got != diagnostic {
 		t.Fatalf("callback and lookup do not share the diagnostic: %v", got)
 	}
-	assertSafeJWKSError(t, err)
+	if !strings.Contains(err.Error(), ErrJWKSRateLimited.Error()) {
+		t.Fatalf("rate-limit cause text lost: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := source.Shutdown(ctx); err != nil {
@@ -69,7 +96,14 @@ func TestJWKSErrorPreservesPrimaryAndCloseCauses(t *testing.T) {
 		closeCanceled       bool
 	}{
 		{"status", "response", "http_status", 503, func() io.Reader { return strings.NewReader("sensitive response") }, nil, false},
-		{"status_with_canceled_close", "response", "http_status", 503, func() io.Reader { return strings.NewReader("sensitive response") }, nil, true},
+		{
+			name:          "status_with_canceled_close",
+			stage:         "response",
+			reason:        "http_status",
+			status:        503,
+			reader:        func() io.Reader { return strings.NewReader("sensitive response") },
+			closeCanceled: true,
+		},
 		{"read", "read", "body_read_failed", 200, func() io.Reader { return responseFailureBody{err: readFailure} }, readFailure, false},
 		{"json", "decode", "invalid_json", 200, func() io.Reader { return strings.NewReader(`{"keys":`) }, nil, false},
 		{"success", "close", "body_close_failed", 200, func() io.Reader { return strings.NewReader(concurrencyJWKS) }, nil, false},
@@ -101,6 +135,9 @@ func TestJWKSErrorPreservesPrimaryAndCloseCauses(t *testing.T) {
 			if !errors.Is(diagnostic, closeCause) {
 				t.Fatalf("callback lost close cause: %v", diagnostic)
 			}
+			if !strings.Contains(diagnostic.Error(), closeCause.Error()) {
+				t.Fatalf("callback lost close cause text: %v", diagnostic)
+			}
 			if tc.name == "success" {
 				if err != nil || diagnostic.Outcome() != "warning" {
 					t.Fatalf("close failure rejected valid keys: %v, %v", err, diagnostic)
@@ -112,21 +149,20 @@ func TestJWKSErrorPreservesPrimaryAndCloseCauses(t *testing.T) {
 				if err == nil || diagnostic.Outcome() != "failed" || !errors.Is(err, closeCause) {
 					t.Fatalf("returned error lost close cause: %v", err)
 				}
-				if tc.primary != nil && (!errors.Is(err, tc.primary) || !errors.Is(diagnostic, tc.primary)) {
+				if tc.primary != nil && (!errors.Is(err, tc.primary) || !errors.Is(diagnostic, tc.primary) ||
+					!strings.Contains(err.Error(), tc.primary.Error())) {
 					t.Fatalf("primary cause lost: %v", err)
 				}
 				if tc.name == "json" {
 					var syntax *json.SyntaxError
-					if !errors.As(err, &syntax) {
+					if !errors.As(err, &syntax) || !strings.Contains(err.Error(), syntax.Error()) {
 						t.Fatal("JSON cause lost")
 					}
 				}
 				if tc.status == 503 && diagnostic.HTTPStatus() != 503 {
 					t.Fatal("HTTP status lost")
 				}
-				assertSafeJWKSError(t, err)
 			}
-			assertSafeJWKSError(t, diagnostic)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			if err := source.Shutdown(ctx); err != nil {
@@ -145,9 +181,17 @@ func TestJWKSShutdownWaitsForStructuredDiagnostic(t *testing.T) {
 	defer releaseOnce.Do(func() { close(release) })
 	var source *KeySourceJWKS
 	source, err := NewManagedKeySourceJWKS("https://example.test/keys", &JWKSOptions{
-		Client: concurrencyClient(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: 200, Body: shutdownBody{Reader: strings.NewReader(concurrencyJWKS), close: func() error { return io.ErrUnexpectedEOF }}}, nil
-		}),
+		Client: concurrencyClient(
+			func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: 200,
+					Body: shutdownBody{
+						Reader: strings.NewReader(concurrencyJWKS),
+						close:  func() error { return io.ErrUnexpectedEOF },
+					},
+				}, nil
+			},
+		),
 		DiagnosticFunc: func(*JWKSError) { source.Stop(); close(entered); <-release; close(finished) },
 	})
 	if err != nil {
@@ -204,15 +248,6 @@ func TestJWKSCancellationStillReportsCloseFailure(t *testing.T) {
 	}
 	if len(diagnostics) != 0 {
 		t.Fatal("duplicate diagnostic")
-	}
-}
-
-func assertSafeJWKSError(t *testing.T, err error) {
-	t.Helper()
-	for _, forbidden := range []string{"user", "secret", "sensitive", "forged-log", "\n", "%zz", "?token="} {
-		if strings.Contains(err.Error(), forbidden) {
-			t.Fatalf("unsafe diagnostic: %q", err.Error())
-		}
 	}
 }
 

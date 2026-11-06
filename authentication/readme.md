@@ -1,11 +1,81 @@
 # Authentication
 
-This package provides functionality for authentication tasks.
+Use a managed JWKS source with an explicitly configured client and verification
+policy. The service owns the client, endpoint policy, lifecycle and logging:
+
+```go
+func run(keyLifetime context.Context, client *http.Client, endpoint string) (result error) {
+    defer client.CloseIdleConnections()
+    policy := authentication.JWKSVerificationPolicy{
+        AllowedAlgorithms: []string{"RS256"},
+    }
+    options := authentication.JWKSOptions{
+        Client:             client,
+        VerificationPolicy: &policy,
+        KeyIDPolicy: authentication.JWKSKeyIDPolicy{
+            Required:         true,
+            MaxBytes:         128,
+            RejectDuplicates: true,
+        },
+        MaxResponseBytes:    64 << 10,
+        RefreshInterval:     5 * time.Minute,
+        RequestOnUnknownKID: true,
+        AllowInitialFetchFailure: true,
+        DiagnosticFunc:           logJWKSDiagnostic,
+    }
+    options.SetRefreshRateLimit(5, time.Minute)
+    keys, err := authentication.NewManagedKeySourceJWKS(endpoint, &options)
+    if err != nil {
+        return err
+    }
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        result = errors.Join(result, keys.Shutdown(ctx))
+    }()
+    if err := keys.Start(keyLifetime); err != nil {
+        return err
+    }
+    return serveRequests(keys) // return after handlers have drained
+}
+```
+
+Keep `keyLifetime` alive until request handlers drain. The constructor does no
+network I/O and starts no workers. `Start` performs the initial fetch and starts
+refresh. With `AllowInitialFetchFailure`, startup can succeed while keys are
+unavailable; `Check` establishes fresh readiness independently of the cache and
+refresh quota. A check is canceled and joined during shutdown. `Shutdown` waits
+for refresh, response cleanup and diagnostics; a deadline error means work is
+still finishing and a later `Shutdown` may wait again. It never closes the
+caller-owned client. See the runnable `NewManagedKeySourceJWKS` example for
+startup, readiness and joined shutdown.
+
+For a trusted inline document, use `NewStaticJWKS(data, policy, keyIDs)`. The
+required `keyIDs` value may be zero to leave IDs optional and unbounded. The
+document is limited to 64 KiB and must contain a nonempty set in which every
+entry is an eligible public verification key. A static source owns no resources.
+A managed source may also contain keys explicitly intended for other uses.
+With either source, present `use`, `key_ops`
+and `alg` metadata is enforced. A missing `alg` is accepted only when exactly one
+configured algorithm matches its key. `JWKSKeyIDPolicy.Required` and `MaxBytes`
+are opt-in for both managed and static sources. Static sources always reject
+duplicate nonempty IDs before usage filtering. A managed source does so when
+`KeyIDPolicy.RejectDuplicates` is true. Its zero value retains the earlier
+filtering behavior, independently of the other key ID settings.
+
+Lookups rejected for the selected token match both `ErrKeyRejected` and the
+existing `ErrJWKSKeyRejected`; invalid provider documents match only the latter.
+Both source types support algorithm-aware lookup. Custom key sources can implement
+`KeySource`, and may also implement `FetchPublicKeyForAlgorithm` to enforce
+metadata. The application composes trust and claim policy separately.
+
+Diagnostic callbacks receive original causes. This package requires Go 1.20 and
+retains its existing constructors and options.
 
 ## Short introduction
 
-The working horse of this package is the `Authenticate(ctx context.Context, token string) (Entity, error)` method which accepts arbitrary string token and returns a
-set of attributes represented by the `type Entity map[string]any` type.
+The working horse of this package is the `Authenticate(ctx context.Context, token string) (Entity, error)` method which accepts arbitrary
+string token and returns a set of attributes represented by the `type Entity map[string]any` type.
 
 ## JWT authentication
 
@@ -69,7 +139,8 @@ as a key source without having to create a separate struct implementing the `Key
 
 #### KeySourceSingle
 
-`KeySourceSingle` is a struct that implements the `KeySource` interface and returns a single public key, regardless of the input key ID (kid). 
+`KeySourceSingle` is a struct that implements the `KeySource` interface and returns a single public key, regardless of the input key ID
+(kid).
 This implementation is useful when you have a single public key for token validation.
 
 ##### Usage
@@ -95,7 +166,8 @@ keySource := authentication.KeySourceFunc(func(ctx context.Context, kid string) 
 ### JWKS (JSON Web Key Set) Key Source
 
 `KeySourceJWKS` is an implementation of the `KeySource` interface that fetches public keys from a remote JSON Web Key Set (JWKS) endpoint. 
-JWKS is a JSON object that represents a set of keys containing the public keys used to verify any JSON Web Token (JWT) issued by the authorization server.
+JWKS is a JSON object that represents a set of keys containing the public keys used to verify any JSON Web Token (JWT) issued by the
+authorization server.
 
 
 #### Features
@@ -104,9 +176,12 @@ JWKS is a JSON object that represents a set of keys containing the public keys u
 - Supports request rate limiting and warning functions.
 - Allows fetching on unknown key IDs (kids) or not requesting on unknown kids, depending on configuration.
 - Caches fetched keys to avoid unnecessary requests.
-- Refreshes keys periodically without blocking reads of cached keys. The refresh interval does not expire cached keys; `MaxCacheAge` enables a separate age limit.
-- Shares concurrent refresh requests. Each caller can cancel its own wait. The HTTP request is canceled when all waiters leave or `Stop` is called.
-- For sources created by `NewKeySourceJWKS`, `Stop` stops background refresh while cached reads and later refreshes for unknown keys remain available. Managed sources use the terminal lifecycle described below.
+- Refreshes keys periodically without blocking reads of cached keys. The refresh interval does not expire cached keys; `MaxCacheAge`
+  enables a separate age limit.
+- Shares concurrent refresh requests. Each caller can cancel its own wait. The HTTP request is canceled when all waiters leave or `Stop`
+  is called.
+- For sources created by `NewKeySourceJWKS`, `Stop` stops background refresh while cached reads and later refreshes for unknown keys
+  remain available. Managed sources use the terminal lifecycle described below.
 
 ##### Usage
 
@@ -262,7 +337,7 @@ method to enforce the binding. `KeySource` itself still requires only
 Failed validation retains the preceding snapshot and its original age. An empty
 `keys: []` clears the snapshot. A nonempty response with no usable keys is a
 validation failure. Lookups of excluded keys and algorithm mismatches match
-`ErrJWKSKeyRejected`, not `ErrKeyNotFound`; they must not activate an absence-only
+`ErrKeyRejected` and `ErrJWKSKeyRejected`, not `ErrKeyNotFound`; they must not activate an absence-only
 fallback. Rejected IDs are retained only for the current snapshot.
 
 The policy and its algorithm list are copied during construction. Managed
@@ -299,12 +374,11 @@ response sizes. Non-success response bodies are closed without being read.
 
 `DiagnosticFunc` receives a `*JWKSError`. Its `Operation`, `Stage`, `Reason`,
 `Outcome`, `HTTPStatus`, and `Field` getters expose bounded fields suitable for structured
-logging. `Error()` includes those fields and excludes response bodies, endpoint
-URLs, key IDs, and underlying error text. When `DiagnosticFunc` is unset,
-`WarnFunc` receives this safe text. Supplying both selects `DiagnosticFunc` only.
+logging. `Error()` includes those fields and the original cause text. When
+`DiagnosticFunc` is unset, `WarnFunc` receives this text. Supplying both selects `DiagnosticFunc` only.
 `Field` identifies a configuration field or a JSON path such as `keys[1].alg`,
 without including the rejected value. Secondary body-close failures also appear
-in the text as `close_reason=body_close_failed`.
+in the text with `close_reason=body_close_failed` and their cause text.
 
 | Failure | Stage | Reason |
 | --- | --- | --- |
@@ -320,9 +394,10 @@ Returned configuration errors retain URL parsing causes. Refresh errors preserve
 network, context, decoding, and body-close causes for `errors.Is` and `errors.As`.
 A primary failure takes precedence over a secondary close failure, with both
 causes available through the same diagnostic. A close failure after valid keys
-were loaded remains a warning and does not prevent publication. Rate-limit
-lookup failures match both `ErrJWKSRateLimited` and the historical `ErrKeyNotFound`,
-and `errors.Unwrap` still returns `ErrKeyNotFound`.
+were loaded remains a warning and does not prevent publication. After a snapshot exists, rate-limit lookup failures match both
+`ErrJWKSRateLimited` and the historical `ErrKeyNotFound`, and `errors.Unwrap`
+still returns `ErrKeyNotFound`. Before the first snapshot in the opt-in startup
+mode, a rate-limited lookup is unavailable and does not match `ErrKeyNotFound`.
 
 Each shared refresh failure produces one event. Cancellation alone is silent,
 but an accompanying close failure is reported. No callback is emitted for an
@@ -332,10 +407,8 @@ configuration errors are returned to the constructor's caller.
 Callbacks run outside source locks, may run concurrently, and may call
 `FetchPublicKey` or `Stop`. `Shutdown` waits for them and must be called outside
 the callback. Use `DiagnosticFunc` when the logging adapter needs the original
-error objects. Pass the diagnostic and its `Unwrap()` result as structured
-fields, and redact sensitive values before output. Preserve the useful cause
-message and `Field` path. The legacy `WarnFunc` only receives the safe summary
-string, so it cannot inspect original error objects.
+error objects. The legacy `WarnFunc` receives the diagnostic string, including
+cause text, but cannot inspect the original error objects.
 
 ### JWKS snapshot age and refresh capacity
 
@@ -343,7 +416,8 @@ Set `JWKSOptions.MaxCacheAge` to a positive duration to limit trust in cached
 keys. Age begins when a validated JWKS snapshot is successfully published. At or
 beyond the configured age, every lookup fails with `ErrKeySetExpired`, including
 lookups for unknown key IDs. The same error applies if no valid snapshot has
-been loaded. It remains available through `errors.Is` when using `ViaJWT`.
+been loaded, except while a managed source with `AllowInitialFetchFailure` is
+waiting for its first successful load. It remains available through `errors.Is` when using `ViaJWT`.
 Expired reads do not trigger foreground refresh. Periodic refresh can restore
 availability; failed requests never extend the snapshot's age. A valid empty
 snapshot is fresh and represents absence of keys. Zero keeps unlimited age.
@@ -364,7 +438,7 @@ age, and HTTP timeout together for the application's rotation requirements.
 Managed construction requires a positive configured rate limit when reservation
 is enabled. Legacy sources without a rate limit remain unlimited.
 
-A rate-limited miss matches `ErrKeyNotFound` through `errors.Is`, but is a wrapped
-failure rather than confirmed absence. A fallback policy that requires confirmed
+After a successful snapshot, a rate-limited miss matches `ErrKeyNotFound` through
+`errors.Is`, but is a wrapped failure rather than confirmed absence. A fallback policy that requires confirmed
 absence should accept only the direct `ErrKeyNotFound` result and must propagate
 expiration, cancellation, lifecycle, and dependency failures.

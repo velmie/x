@@ -3,7 +3,9 @@ package authentication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -200,17 +202,49 @@ func TestLegacyJWKSStartKeepsEagerLifetime(t *testing.T) {
 }
 
 func ExampleNewManagedKeySourceJWKS() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	source, err := NewManagedKeySourceJWKS("https://example.com/.well-known/jwks.json", &JWKSOptions{Client: &http.Client{Timeout: 5 * time.Second}, RefreshInterval: time.Minute})
+	server := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, exampleJWKS())
+			},
+		),
+	)
+	defer server.Close()
+	policy := JWKSVerificationPolicy{
+		AllowedAlgorithms: []string{"EdDSA"},
+	}
+	source, err := NewManagedKeySourceJWKS(
+		server.URL,
+		&JWKSOptions{
+			Client:             server.Client(),
+			VerificationPolicy: &policy,
+			KeyIDPolicy: JWKSKeyIDPolicy{
+				Required:         true,
+				MaxBytes:         128,
+				RejectDuplicates: true,
+			},
+			MaxResponseBytes: 64 << 10,
+			RefreshInterval:  time.Minute,
+		},
+	)
 	if err != nil {
-		return
+		panic(err)
 	}
-	defer source.Stop()
-	if err := source.Start(ctx); err != nil {
-		return
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := source.Shutdown(ctx); err != nil {
+			panic(err)
+		}
+	}()
+	if err := source.Start(context.Background()); err != nil {
+		panic(err)
 	}
-	// Pass source to NewViaJWT. Cancel ctx or call Stop during shutdown.
+	if err := source.Check(context.Background()); err != nil {
+		panic(err)
+	}
+	fmt.Println("ready")
+	// Output: ready
 }
 
 func TestManagedJWKSDemandFailureRetainsLifetimeDeadline(t *testing.T) {

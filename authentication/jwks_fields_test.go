@@ -42,7 +42,6 @@ func TestJWKSDiagnosticIdentifiesField(t *testing.T) {
 			if diagnostic == nil || !strings.Contains(diagnostic.Error(), "field="+tc.field) {
 				t.Fatalf("callback lost field context: %v", diagnostic)
 			}
-			assertSafeJWKSError(t, diagnostic)
 		})
 	}
 }
@@ -54,7 +53,16 @@ func TestJWKSConfigurationDiagnosticIdentifiesField(t *testing.T) {
 	}{
 		{name: "endpoint", endpoint: "https://example.test/%zz", field: "endpoint"},
 		{name: "interval", endpoint: "https://example.test/keys", options: &JWKSOptions{RefreshInterval: -1}, field: "RefreshInterval"},
-		{name: "algorithm", endpoint: "https://example.test/keys", options: &JWKSOptions{VerificationPolicy: &JWKSVerificationPolicy{AllowedAlgorithms: []string{"ES256", "unsupported"}}}, field: "VerificationPolicy.AllowedAlgorithms[1]"},
+		{
+			name:     "algorithm",
+			endpoint: "https://example.test/keys",
+			options: &JWKSOptions{
+				VerificationPolicy: &JWKSVerificationPolicy{
+					AllowedAlgorithms: []string{"ES256", "unsupported"},
+				},
+			},
+			field: "VerificationPolicy.AllowedAlgorithms[1]",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var options []*JWKSOptions
