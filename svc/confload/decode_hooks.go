@@ -7,13 +7,13 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
 	urlType               = reflect.TypeOf(&url.URL{})
 	errInvalidAbsoluteURL = errors.New("invalid absolute URL (scheme and host required)")
 	errInvalidBool        = errors.New("invalid boolean value")
-	errInvalidNumber      = errors.New("invalid number value")
 )
 
 func stringToURLHook(_, to reflect.Type, data any) (any, error) {
@@ -33,10 +33,10 @@ func stringToURLHook(_, to reflect.Type, data any) (any, error) {
 
 	parsed, err := url.Parse(str)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("expected an absolute URL with a valid scheme and host: %w", err.(*url.Error).Err)
 	}
 	if parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("%w: %q", errInvalidAbsoluteURL, str)
+		return nil, fmt.Errorf("expected an absolute URL with scheme and host: %w", errInvalidAbsoluteURL)
 	}
 
 	return parsed, nil
@@ -60,7 +60,7 @@ func stringToBoolHook(from, to reflect.Type, data any) (any, error) {
 		return false, nil
 	}
 
-	return nil, fmt.Errorf("%w: %q", errInvalidBool, raw)
+	return nil, fmt.Errorf("expected boolean (true/false, yes/no, y/n, on/off, 1/0): %w", errInvalidBool)
 }
 
 func stringToNumberHook(from, to reflect.Type, data any) (any, error) {
@@ -81,7 +81,7 @@ func stringToNumberHook(from, to reflect.Type, data any) (any, error) {
 		}
 		val, err := strconv.ParseInt(raw, 10, to.Bits())
 		if err != nil {
-			return nil, fmt.Errorf("%w %q: %w", errInvalidNumber, raw, err)
+			return nil, fmt.Errorf("expected %s as a signed base-10 integer: %w", to, err.(*strconv.NumError).Err)
 		}
 
 		return val, nil
@@ -91,7 +91,7 @@ func stringToNumberHook(from, to reflect.Type, data any) (any, error) {
 		}
 		val, err := strconv.ParseUint(raw, 10, to.Bits())
 		if err != nil {
-			return nil, fmt.Errorf("%w %q: %w", errInvalidNumber, raw, err)
+			return nil, fmt.Errorf("expected %s as an unsigned base-10 integer: %w", to, err.(*strconv.NumError).Err)
 		}
 
 		return val, nil
@@ -118,11 +118,22 @@ func stringToFloatHook(from, to reflect.Type, data any) (any, error) {
 		}
 		val, err := strconv.ParseFloat(raw, to.Bits())
 		if err != nil {
-			return nil, fmt.Errorf("%w %q: %w", errInvalidNumber, raw, err)
+			return nil, fmt.Errorf("expected %s as a floating-point number: %w", to, err.(*strconv.NumError).Err)
 		}
 
 		return val, nil
 	}
 
 	return data, nil
+}
+
+func stringToDurationHook(from, to reflect.Type, data any) (any, error) {
+	if from.Kind() != reflect.String || to != reflect.TypeFor[time.Duration]() {
+		return data, nil
+	}
+	value, err := time.ParseDuration(data.(string))
+	if err != nil {
+		return nil, errors.New("expected a Go duration such as 5s or 1m")
+	}
+	return value, nil
 }

@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	sensitiveTag        = "sensitive"
+	sensitiveTagEnabled = "true"
+)
+
 var errDescribeNonStruct = errors.New("confload: DescribeStruct expects struct type")
 
 // FieldDescriptor describes a single configuration field exposed via config tags.
@@ -29,8 +34,9 @@ func (d FieldDescriptor) EnvName(prefix string) string {
 
 // FieldCollection aggregates configuration field descriptors for a struct tree.
 type FieldCollection struct {
-	fields []FieldDescriptor
-	index  map[string]int
+	fields   []FieldDescriptor
+	index    map[string]int
+	rootType reflect.Type
 }
 
 // Fields returns a copy of the collected descriptors ordered by their dotted paths.
@@ -75,8 +81,7 @@ func DescribeStruct[T any]() (FieldCollection, error) {
 
 // DescribeStructWithTag enumerates the configuration fields declared on the provided struct type using the tag name.
 func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
-	var target T
-	typeOf := reflect.TypeOf(target)
+	typeOf := reflect.TypeFor[T]()
 	for typeOf.Kind() == reflect.Pointer {
 		typeOf = typeOf.Elem()
 	}
@@ -87,7 +92,7 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 	tagName = normalizeTagName(tagName)
 
 	fields := make([]FieldDescriptor, 0)
-	collectFieldDescriptors(typeOf, "", nil, tagName, &fields)
+	collectFieldDescriptors(typeOf, "", nil, tagName, false, &fields)
 
 	defaults := collectTagDefaults(typeOf, "", tagName)
 	for i := range fields {
@@ -105,10 +110,21 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 		index[fields[i].Path] = i
 	}
 
-	return FieldCollection{fields: fields, index: index}, nil
+	return FieldCollection{
+		fields:   fields,
+		index:    index,
+		rootType: typeOf,
+	}, nil
 }
 
-func collectFieldDescriptors(t reflect.Type, prefix string, index []int, tagName string, acc *[]FieldDescriptor) {
+func collectFieldDescriptors(
+	t reflect.Type,
+	prefix string,
+	index []int,
+	tagName string,
+	inheritedSensitive bool,
+	acc *[]FieldDescriptor,
+) {
 	if t == nil {
 		return
 	}
@@ -133,13 +149,14 @@ func collectFieldDescriptors(t reflect.Type, prefix string, index []int, tagName
 			key = prefix + "." + tag
 		}
 
+		sensitive := inheritedSensitive || tags[sensitiveTag] == sensitiveTagEnabled
 		ft := f.Type
 		for ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
 
 		if ft.Kind() == reflect.Struct && ft.PkgPath() != netURLPkg {
-			collectFieldDescriptors(ft, key, currentIndex, tagName, acc)
+			collectFieldDescriptors(ft, key, currentIndex, tagName, sensitive, acc)
 
 			continue
 		}
@@ -147,13 +164,20 @@ func collectFieldDescriptors(t reflect.Type, prefix string, index []int, tagName
 		validation := strings.TrimSpace(tags["validate"])
 		required := hasValidateRequired(validation)
 
+		attributes := filterKnownTags(tags, tagName)
+		if sensitive {
+			if attributes == nil {
+				attributes = make(map[string]string)
+			}
+			attributes[sensitiveTag] = sensitiveTagEnabled
+		}
 		descriptor := FieldDescriptor{
 			Path:       key,
 			Type:       f.Type,
 			Hint:       strings.TrimSpace(tags["hint"]),
 			Required:   required,
 			Validation: validation,
-			Attributes: filterKnownTags(tags, tagName),
+			Attributes: attributes,
 			Index:      currentIndex,
 		}
 

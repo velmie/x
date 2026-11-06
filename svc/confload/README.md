@@ -1,6 +1,64 @@
 # confload
 
-confload is a small configuration loader for Go services. It merges defaults, files, readers, environment variables, flags, and overrides into a struct, can report where each value came from, and can reject unknown keys.
+confload loads configuration for Go services. It merges defaults, files,
+readers, environment variables, flags, and overrides into a struct. It can
+report where each value came from and reject unknown keys.
+
+## Inspect declared configuration
+
+After loading, describe the fields and render their decoded values:
+
+```go
+fields, err := confload.DescribeStruct[Config]()
+if err != nil {
+    return err
+}
+rows, err := confload.Inspect(fields, cfg, snapshot, confload.InspectOptions{
+    EnvName: loader.EnvName,
+    OverrideLabel: "cli",
+})
+if err != nil {
+    return err
+}
+return confload.WriteInspection(out, format, rows)
+```
+
+Use `Inspect(fields, nil, confload.Snapshot{}, opts)` for schema-only output.
+Inspection performs no source loading and never reads `Snapshot.Values`. It
+reads the decoded struct, so zero values are retained and nil nested pointers
+are shown as null. Pass `loader.EnvName` to respect its prefix and aliases.
+
+Mark sensitive fields or their containing structs with `sensitive:"true"`.
+Inspection masks both defaults and values as `[REDACTED]` before formatting or
+marshaling. `DescribeStruct` itself retains the declared metadata, including
+raw defaults. Treat it accordingly. File origins are displayed as `file[n]`,
+reader and flag identifiers are reduced to source labels, and environment
+origins use the declared environment name. Paths and reader names are omitted.
+An override label defaults to `override`; applications may use another label
+such as `cli`. Origins are matched by the descriptor's exact
+path. When inspecting a separately described `LoadSubset` value, project the
+snapshot's prefixed origin keys to the subset's relative paths and retain
+`Snapshot.Files` for file numbering.
+
+`WriteInspection` accepts `text` and `json`; an empty format selects text. JSON
+uses flattened field metadata and includes `value` and `origin` only when values
+were inspected. Text values use JSON encoding, including escaped aggregate
+strings. Writer errors are returned unchanged.
+
+Parse CLI override entries before constructing the loader:
+
+```go
+overrides, err := confload.ParseOverrides(fields, entries)
+if err != nil {
+    return err
+}
+loader := confload.New(confload.WithOverrides(overrides))
+```
+
+Entries are `path=value`; values may be empty or contain `=`. Paths must exactly
+match a declared field and later entries win. Syntax errors wrap
+`ErrInvalidOverride`; unknown paths return `*UnknownKeysError`. Override values
+are not included in these errors.
 
 ## Goals
 
@@ -235,7 +293,11 @@ loader := confload.New(
 
 ### Decode hooks
 
-Add custom decode hooks that run after the built in ones.
+Add custom decode hooks that run after the built in ones. Built-in conversion
+errors describe the expected type or format without including the rejected
+value. Numeric errors wrap `strconv.ErrSyntax` or `strconv.ErrRange`; URL
+errors wrap the inner parsing cause. Invalid duration errors describe the
+expected format. Custom hooks own their error messages.
 
 ```go
 type Level string

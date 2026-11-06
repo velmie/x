@@ -24,7 +24,7 @@ import (
 var (
 	errUnsupportedConfigFormat = errors.New("unsupported config file format")
 	errConfigFileIsDir         = errors.New("config file path must be a file")
-	errNilLoader              = errors.New("loader is nil")
+	errNilLoader               = errors.New("loader is nil")
 )
 
 const defaultTagName = "k"
@@ -390,7 +390,7 @@ func (l *Loader) unmarshal(prefix string, target any) error {
 	}
 
 	hooks := []mapstructure.DecodeHookFunc{
-		mapstructure.StringToTimeDurationHookFunc(),
+		stringToDurationHook,
 		stringToBoolHook,
 		stringToNumberHook,
 		stringToFloatHook,
