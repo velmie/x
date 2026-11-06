@@ -1,7 +1,7 @@
 # Validation
 
-This module provides reusable string rules, field names and strict JSON object
-decoding for [go-playground/validator](https://github.com/go-playground/validator).
+This module provides reusable string rules, field names, and strict JSON object
+and flat URL query decoding for [go-playground/validator](https://github.com/go-playground/validator).
 Configure and register a validator before using it, including concurrent use:
 
 ```go
@@ -12,6 +12,49 @@ if err := validation.Register(v); err != nil {
 }
 err := validation.DecodeJSON(data, &input, v)
 ```
+
+## Flat query decoding
+
+Declare a DTO, apply service-owned defaults, and validate with the configured
+native validator:
+
+```go
+type listQuery struct {
+    Sort string `json:"sort" query:"single" validate:"oneof=sku -sku"`
+    SKUs []string `json:"sku" validate:"max=20,unique,dive,required"`
+}
+input := listQuery{Sort: "sku"}
+if err := validation.DecodeQuery(rawQuery, &input, v); err != nil {
+    return err
+}
+```
+
+`DecodeQuery` accepts a non-nil pointer to a struct. Fields use their `json`
+names, or Go names when untagged. Untagged exported embedded value structs are
+flattened. Unexported embedded structs, embedded pointer fields, and duplicate
+Go field names across embeddings, including ignored fields, are rejected. Scalars,
+pointers, scalar slices and `encoding.TextUnmarshaler` types are supported.
+Gorilla v1.4.1 cannot safely bind slices of pointers to named scalar types
+without `TextUnmarshaler`. Use scalar values or implement `TextUnmarshaler`
+until that support exists upstream.
+
+Names match case-insensitively. For repeated scalar names the last occurrence
+wins, including across case aliases. Empty ordinary scalars leave the existing
+value unchanged. Slices follow Gorilla's native binding behavior.
+
+The only query tag is `query:"single"`. It rejects more than one occurrence,
+including empty values and case aliases, with `max=1`. The decoder rejects
+unknown names, nested paths and ambiguous or unsupported DTO metadata. Invalid
+DTO metadata is an ordinary programming error. Validation failures are native
+`validator.ValidationErrors` and can be converted with `Violations`. A decoding
+failure may partially populate the destination, which must be discarded.
+
+A `QueryError` reports the field, declared constraint, and native cause.
+`Unwrap` returns the native parse or binding error unchanged. Gorilla returns a
+`schema.MultiError`, which does not itself unwrap its contained errors. Complete
+validator registration before concurrent use.
+
+## Text rules
 
 | Tag | Accepted strings |
 | --- | --- |
@@ -35,9 +78,8 @@ named embed must be made a named type.
 then validates the destination. Empty input contains only JSON whitespace. Standard
 `encoding/json` behavior applies to name matching, duplicate keys, null and escaped
 surrogates. The caller owns size limits and must discard partially populated results
-on error. Decoder causes and native validator errors are retained. Field paths and
-errors may contain input values or map keys; callers must avoid logging sensitive
-values. Error ordering is not guaranteed.
+on error. Decoder causes and native validator errors are retained. Error ordering
+is not guaranteed.
 
 ## Application violations
 

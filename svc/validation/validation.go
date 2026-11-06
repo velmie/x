@@ -1,4 +1,6 @@
-// Package validation extends go-playground/validator with reusable text rules.
+// Package validation provides declarative validation and strict decoding.
+// DecodeQuery binds flat URL queries to tagged DTOs and validates them using
+// a caller-configured validator.
 package validation
 
 import (

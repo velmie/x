@@ -24,7 +24,8 @@ func TestContractNativeErrorsAndJSON(t *testing.T) {
 	var dst contractInput
 	err := DecodeJSON([]byte(`{"name":"long"}`), &dst, v)
 	var fields validator.ValidationErrors
-	if !errors.As(err, &fields) || len(fields) != 1 || FieldPath(dst, fields[0]) != "name" || fields[0].Tag() != "max" || fields[0].Param() != "3" {
+	if !errors.As(err, &fields) || len(fields) != 1 || FieldPath(dst, fields[0]) != "name" ||
+		fields[0].Tag() != "max" || fields[0].Param() != "3" {
 		t.Fatalf("field error: %v", err)
 	}
 	for _, tc := range []struct {

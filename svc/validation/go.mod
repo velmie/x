@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/go-playground/validator/v10 v10.30.5
+	github.com/gorilla/schema v1.4.1
 	github.com/velmie/x/svc/apperror v0.1.0
 )
 

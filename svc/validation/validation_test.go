@@ -256,7 +256,8 @@ func TestMaxBytes(t *testing.T) {
 		}
 		if err != nil {
 			var failures validator.ValidationErrors
-			if !errors.As(err, &failures) || len(failures) != 1 || failures[0].Field() != "Value" || failures[0].Param() != "3" || failures[0].Tag() != RuleMaxBytes {
+			if !errors.As(err, &failures) || len(failures) != 1 || failures[0].Field() != "Value" ||
+				failures[0].Param() != "3" || failures[0].Tag() != RuleMaxBytes {
 				t.Fatalf("field or limit lost: %v", err)
 			}
 		}
