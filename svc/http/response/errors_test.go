@@ -24,7 +24,8 @@ func TestError(t *testing.T) {
 					Target: TargetField,
 				},
 			},
-			expected: `{"errors":[{"code":"INVALID_REQUEST_PARAMETER","title":"id is not valid","source":"id","meta":{"format":"[0-9]*"},"target":"field"}]}`,
+			expected: `{"errors":[{"code":"INVALID_REQUEST_PARAMETER","title":"id is not valid",` +
+				`"source":"id","meta":{"format":"[0-9]*"},"target":"field"}]}`,
 		},
 		{
 			desc: "Multiple errors",
@@ -43,7 +44,8 @@ func TestError(t *testing.T) {
 					StatusCode: 400,
 				},
 			},
-			expected: `{"errors":[{"code":"404","title":"Not Found","target":"common"},{"code":"400","title":"Bad Request","source":"/users","target":"common"}]}`,
+			expected: `{"errors":[{"code":"404","title":"Not Found","target":"common"},` +
+				`{"code":"400","title":"Bad Request","source":"/users","target":"common"}]}`,
 		},
 	}
 

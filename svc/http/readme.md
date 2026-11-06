@@ -36,6 +36,11 @@ Use [requestauth](requestauth/readme.md) to authenticate protected HTTP routes
 before reading a request body and pass the established principal to an operation.
 The service owns key-source lifecycle and application authorization.
 
+## Request
+
+Use [request](request/readme.md) to resolve an optional page and limit into a
+bounded collection window. The service owns query decoding and filter mapping.
+
 ## Response
 
 The `response` package provides organization response envelopes and an
