@@ -1,79 +1,45 @@
-# HTTP Auth package
+# HTTP authentication
 
-This package provides functionality that can be used to implement an authorization middleware. It offers primitives with
-which an authorization layer can be constructed.
-
-## Example
+Protect a handler with a verifier and pass its principal to the operation:
 
 ```go
-package main
-
-import (
-	"context"
-	"github.com/gin-gonic/gin"
-	"github.com/velmie/x/svc/http/requestauth"
-	"net/http"
+protected := requestauth.Require(
+    verifier,
+    logger,
+    requestauth.PrincipalHandler(books.CreateBook),
 )
-
-func main() {
-
-	tokenExtractor := &FakeTokenExtractor{}
-	authMethod := &FakeMethod{}
-	injector := &FakeAuthInjector{}
-
-	authPipeline := requestauth.NewPipeline(tokenExtractor, authMethod, injector)
-
-	httpHandlerExample := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestWithInjectedAuth, err := authPipeline(w, r)
-		if err != nil {
-			// handle error
-		}
-
-		// call some next handler
-		// next.ServeHTTP(w, requestWithInjectedAuth)
-	})
-
-	ginHandlerExample := gin.HandlerFunc(func(c *gin.Context) {
-		requestWithInjectedAuth, err := authPipeline(w, r)
-		if err != nil {
-			// handle error
-		}
-
-		// set authenticated request into gin.Context
-		c.Request = requestWithInjectedAuth
-		// ...
-	})
-
-}
-
-type FakeAuthInjector struct{}
-
-func (f FakeAuthInjector) InjectAuth(entity requestauth.Entity, w http.ResponseWriter, r *http.Request) (*http.Request, error) {
-	// do something with the request to inject authenticated entity...
-	ctx := r.Context()
-
-	// ctx = context.WithValue(ctx, ...)
-
-	// use r.WithContext...
-	return r.WithContext(ctx), nil
-}
-
-type FakeTokenExtractor struct{}
-
-func (f FakeTokenExtractor) Extract(r *http.Request) (token string, err error) {
-	// do something with the request to extract token
-	return "fake-token", nil
-}
-
-type FakeMethod struct{}
-
-func (FakeMethod) Authenticate(ctx context.Context, token string) (requestauth.Entity, error) {
-	// this just example
-	// see https://github.com/velmie/x/tree/main/svc/authx for JWT auth method
-	return requestauth.Entity{
-		"id":   "example-id",
-		"role": "admin",
-		"name": "Some User",
-	}, nil
-}
+mux.Handle("/bookstore/private/v1/books", protected)
 ```
+
+`verifier` implements `Authenticator`; an `*authx.Verifier` satisfies it
+directly. Construct the key source and trust policy in service bootstrap. The
+verifier and key source own no transport authorization rules. The operation
+checks permissions and ownership using its principal. `Principal` panics when a
+required gate was omitted, so use `WithPrincipal` only at a trusted boundary.
+
+The gate extracts exactly one Authorization header with a case-insensitive
+Bearer scheme and two whitespace-separated fields. Duplicate headers, combined
+credentials, values above 8200 bytes and tokens above 8192 bytes are rejected.
+It reads no cookies, query parameters or request body. `BearerToken` and
+`StrictBearerTokenExtractor` return the existing `ErrMissingToken` or
+`ErrInvalidToken`. `Authenticate` also classifies extraction failures as
+`identity.ErrInvalidCredentials` and does no logging or response writing.
+
+Missing, malformed and invalid credentials receive HTTP 401 with
+`WWW-Authenticate: Bearer`. An authentication dependency failure receives 503,
+a request cancellation 499, a request deadline 504, and an unclassified failure
+500. A live request with a dependency timeout receives 503. HEAD responses have
+the same status and headers without a body. The gate records one rejection and
+preserves any response-write failure in that record. The logger receives the
+original error and logs it as is.
+
+Existing users can adopt strict header framing while retaining their pipeline and
+injector:
+
+```go
+extractor := requestauth.StrictBearerTokenExtractor{}
+pipeline := requestauth.NewPipeline(extractor, method, injector)
+```
+
+`NewBearerTokenExtractor` and `NewPipeline` retain their existing behavior. The
+package starts no workers and owns no resources. It requires Go 1.21.

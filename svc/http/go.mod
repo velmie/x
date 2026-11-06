@@ -5,3 +5,5 @@ go 1.21.0
 require go.uber.org/mock v0.2.0
 
 require github.com/velmie/x/svc/apperror v0.1.0
+
+require github.com/velmie/x/svc/identity v0.1.0

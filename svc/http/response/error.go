@@ -19,6 +19,12 @@ const (
 	ErrCodeRateLimitExceeded = "RATE_LIMIT_EXCEEDED"
 	// ErrCodeUnauthorized is the error code used when a request lacks valid authentication credentials.
 	ErrCodeUnauthorized = "UNAUTHORIZED"
+	// ErrCodeAuthUnavailable identifies an unavailable authentication dependency.
+	ErrCodeAuthUnavailable = "AUTH_UNAVAILABLE"
+	// ErrCodeRequestCanceled identifies a canceled request.
+	ErrCodeRequestCanceled = "REQUEST_CANCELED"
+	// ErrCodeDeadlineExceeded identifies an expired request deadline.
+	ErrCodeDeadlineExceeded = "DEADLINE_EXCEEDED"
 	// ErrCodeInternalServerError is the error code used when an unhandled error occurs on the server.
 	ErrCodeInternalServerError = "INTERNAL_SERVER_ERROR"
 	// ErrCodeInvalidRequestBody is the error code used when the request body is invalid or malformed.

@@ -32,6 +32,10 @@ Keep operational routes outside business access logs and tracing. The service
 supplies any safe access attributes, including attributes derived from its own
 trusted-proxy policy.
 
+Use [requestauth](requestauth/readme.md) to authenticate protected HTTP routes
+before reading a request body and pass the established principal to an operation.
+The service owns key-source lifecycle and application authorization.
+
 ## Response
 
 The `response` package provides organization response envelopes and an

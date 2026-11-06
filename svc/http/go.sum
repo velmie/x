@@ -1,4 +1,6 @@
 github.com/velmie/x/svc/apperror v0.1.0 h1:AOdobfAkXOVlWbn9UA2AbeAH5APaTzX5PxWFE9hTm4g=
 github.com/velmie/x/svc/apperror v0.1.0/go.mod h1:bcTwkdh6H0pvVxtfd2SUnsp7STu6annAtjBleYSR3Ao=
+github.com/velmie/x/svc/identity v0.1.0 h1:/HSqm27SccZb6qs7T/tCZHQkL2Q8a/1SHZP6Gqc7bC8=
+github.com/velmie/x/svc/identity v0.1.0/go.mod h1:uTcvtQUN20xEb+9yBcP2bXU/OmMtDmQ+DlrKgj12BTM=
 go.uber.org/mock v0.2.0 h1:TaP3xedm7JaAgScZO7tlvlKrqT0p7I6OsdGB5YNSMDU=
 go.uber.org/mock v0.2.0/go.mod h1:J0y0rp9L3xiff1+ZBfKxlC1fz2+aO16tw0tsDOixfuM=
