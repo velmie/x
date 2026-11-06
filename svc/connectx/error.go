@@ -1,4 +1,5 @@
-// Package connectx maps application failures to native Connect errors.
+// Package connectx maps application failures and authentication rejections to
+// native Connect behavior without owning application authorization.
 package connectx
 
 import (

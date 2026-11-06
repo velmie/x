@@ -1,4 +1,36 @@
-# Connect application errors
+# Connect service boundaries
+
+Authenticate request headers before Connect receives the message:
+
+```go
+gate := connectx.AuthGate(verifier, logger, connectx.ErrorOptions{})
+rpcOption := connect.WithRequestGate(gate)
+```
+
+The verifier implements `requestauth.Authenticator`; `*authx.Verifier` can be
+used directly. A successful gate attaches the identity for retrieval with
+`requestauth.Principal(ctx)`. Application operations still decide whether a
+principal has permission. Bootstrap owns source startup, readiness, shutdown,
+client policy and diagnostics.
+
+Missing, malformed or invalid credentials map to Unauthenticated. An unavailable
+source maps to Unavailable, an unclassified failure to Internal, and a canceled
+or expired request to Canceled or DeadlineExceeded. A dependency timeout while
+the request is live maps to Unavailable. `ErrorOptions.Message`, when set, is one
+fixed public message for every rejection and must be safe for clients. Empty
+selects safe defaults. Returned `*connect.Error` values retain the original cause
+for `errors.Is` and `errors.As` on the server. The logger receives the original
+error and logs it as is.
+
+Connect runs request gates before decoding messages and before interceptors.
+Rejected requests therefore bypass interceptor logging and telemetry. Instrument
+the gate when those rejections must be observed. Gate panics bypass Connect's
+interceptor recovery, so put HTTP recovery around the handler. If using
+`server.Recover`, supply a protocol-specific `RecoveryOptions.Responder` when
+clients need a native Connect, gRPC or gRPC-Web panic response. The gate starts
+no workers and owns no resources. This module requires Go 1.25.
+
+## Application errors
 
 Convert an application failure at the RPC boundary and log its original cause:
 
@@ -14,9 +46,9 @@ logger.LogAttrs(
 return rpcErr
 ```
 
-The service owns severity, diagnostic context and redaction. Its logger must
-redact sensitive values from errors without discarding useful causes. Apply
-service panic, cancellation, deadline and authentication policies before mapping.
+The service owns severity and diagnostic context. Its logger receives the original
+error and logs it as is. Apply service panic, cancellation, deadline and
+authentication policies before mapping.
 
 `FromApplicationError` selects the first application error in `errors.As` order.
 `Code` maps Invalid to InvalidArgument, Forbidden to PermissionDenied, NotFound
