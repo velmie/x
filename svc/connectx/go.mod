@@ -9,4 +9,4 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-require github.com/velmie/x/svc/http v1.7.0
+require github.com/velmie/x/svc/http v1.5.0

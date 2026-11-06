@@ -7,7 +7,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/stretchr/testify v1.12.1
 	github.com/velmie/x/envx v0.3.0
-	github.com/velmie/x/svc/http v1.6.0
+	github.com/velmie/x/svc/http v1.5.0
 	go.opentelemetry.io/contrib/propagators/b3 v1.46.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.46.0
