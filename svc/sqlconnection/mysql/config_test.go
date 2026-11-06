@@ -139,7 +139,8 @@ func TestConfigFromEnv(t *testing.T) {
 				"DB_UNSAFE_DISABLE_TLS":       "true",
 			},
 			expectsError: true,
-		}, {
+		},
+		{
 			name: "DB_PASS is empty",
 			envs: map[string]string{
 				"DB_HOST":                     "localhost",
