@@ -4,9 +4,10 @@ go 1.21.0
 
 require (
 	github.com/go-jose/go-jose/v3 v3.0.0
-	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-retryablehttp v0.7.4
-	github.com/velmie/x/authentication v1.2.0
+	github.com/velmie/x/authentication v1.3.0
+	github.com/velmie/x/svc/identity v0.1.0
 )
 
 require (

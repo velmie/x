@@ -1,4 +1,68 @@
-# Authentication Package
+# Service authentication
+
+Use a verifier with a trusted inline key set and an explicit trust domain:
+
+```go
+policy := authx.TrustPolicy{
+    Algorithms: []string{"RS256"},
+    Issuers:    []string{"https://issuer.example"},
+    Audiences:  []string{"bookstore"},
+}
+keyPolicy := authentication.JWKSVerificationPolicy{
+    AllowedAlgorithms: policy.Algorithms,
+}
+keyIDs := authentication.JWKSKeyIDPolicy{
+    Required:         true,
+    MaxBytes:         authx.DefaultMaxKeyIDBytes,
+    RejectDuplicates: true,
+}
+keys, err := authentication.NewStaticJWKS(publicJWKS, keyPolicy, keyIDs)
+if err != nil {
+    return err
+}
+verifier, err := authx.NewVerifier(keys, policy, authx.ClaimLimits{})
+if err != nil {
+    return err
+}
+principal, err := verifier.Authenticate(ctx, token)
+```
+
+`keys` is a borrowed `authentication.KeySource`. The verifier performs no I/O at
+construction and owns no workers or shutdown. Use `authentication.StaticJWKS`
+for inline keys or a managed source for remote keys. The service owns managed
+startup, client policy, readiness and joined shutdown, as described in the
+[authentication module](../../authentication/readme.md). The verifier passes
+algorithm-aware lookups to sources that support them. A bare public key source
+cannot enforce JWK metadata that it does not have.
+
+The same `keyIDs` value can be assigned to `JWKSOptions.KeyIDPolicy` for a
+managed source. `RejectDuplicates` opts that source into rejecting repeated
+IDs before filtering key usage. Static sources always reject such duplicates.
+
+Each verifier represents one trust domain: all configured issuers share its key
+source. Use separate verifiers for independently trusted key sets. The policy
+requires nonempty algorithm, issuer and audience lists and a nonnegative leeway.
+Allowed algorithms are RS256/384/512, PS256/384/512, ES256/384/512 and EdDSA.
+The verifier requires `iss`, `sub`, `aud` and `exp`, validates a supplied `nbf`,
+and does not validate `iat`. At least one configured audience must match.
+Issuer and subject are preserved exactly. Permissions are an optional array of
+nonempty strings without surrounding whitespace; no roles or scopes
+are converted to permissions.
+
+Zero `ClaimLimits` fields select these maximum byte/count defaults: token 8192,
+key ID 128, issuer 512, subject 128, permissions 32 and permission 64. Positive
+values can tighten a bound; negative values or values above the defaults fail
+construction. Authentication failures return an empty principal. Credential
+rejections match `identity.ErrInvalidCredentials`; source failures match
+`identity.ErrUnavailable` and retain the original cause. The caller's logger
+receives the original error and logs it as is. `Verifier` is safe for concurrent
+use when its borrowed source is safe for concurrent use.
+
+`NewJWTMethod`, its options and the managed factories remain available for
+existing consumers and retain their established credential model. The principal
+verifier does not silently change those APIs.
+
+## Existing JWT methods
 
 This package provides a solution for JWT (JSON Web Tokens) authentication and validation, supporting
 multiple JWT signing methods and allowing for flexible authentication mechanisms.
@@ -17,7 +81,7 @@ multiple JWT signing methods and allowing for flexible authentication mechanisms
 import (
 "context"
 "fmt"
-"github.com/velmie/x/svc/authx"
+authentication "github.com/velmie/x/svc/authx"
 "net/url"
 )
 
@@ -98,11 +162,9 @@ outcome, HTTP status, source, and affected field where available. The `error`
 field contains the original error object. A JWKS diagnostic also supplies its
 underlying errors in `cause`, including secondary response-close failures.
 Fallback messages retain the error and identify the primary and fallback sources.
-The supplied logger must support concurrent calls and redact sensitive values
-in error chains before output. Preserve useful cause messages and field paths.
-The adapter does not add token, key ID, URL, or response-body fields. Upstream
-errors can contain credentials or URLs, so a logger that prints them verbatim is
-not suitable for sensitive inputs. The HTTP retry client's own logging is disabled.
+The supplied logger must support concurrent calls and logs the original errors
+as is. The adapter does not add token, key ID, URL, or response-body fields.
+The HTTP retry client's own logging is disabled.
 
 ### Signing algorithm allowlist
 
@@ -151,14 +213,13 @@ in that client when needed. Source callbacks take precedence over `Log`.
 `JWKSOptions.DiagnosticFunc` receives a typed `*authentication.JWKSError` and takes
 precedence over `WarnFunc`. When either callback is supplied, automatic JWKS
 logging is disabled. With neither supplied, `Log` receives one structured warning
-per event. The existing `WarnFunc` remains available for safe text diagnostics.
+per event. The existing `WarnFunc` remains available for text diagnostics.
 
 `JWKSError` exposes `Operation`, `Stage`, `Reason`, `Outcome`, `HTTPStatus`, and `Field`
 getters. Underlying errors remain available through `errors.Is` and `errors.As`,
 including response-close failures. A close failure after a valid response is a
-warning and does not prevent startup. The logging adapter receives these
-original error objects and owns redaction before serialization. Shutdown waits
-for the selected callback to finish.
+warning and does not prevent startup. The logging adapter receives the original
+error objects and logs them as is. Shutdown waits for the selected callback to finish.
 A nil signing-method list uses the existing defaults. An explicitly empty list
 is rejected.
 
@@ -227,6 +288,11 @@ Managed methods can opt into `authentication.JWKSVerificationPolicy` through
 ```go
 sourceOptions.VerificationPolicy = &authentication.JWKSVerificationPolicy{
     AllowedAlgorithms: []string{"RS256"},
+}
+sourceOptions.KeyIDPolicy = authentication.JWKSKeyIDPolicy{
+    Required:         true,
+    MaxBytes:         128,
+    RejectDuplicates: true,
 }
 ```
 

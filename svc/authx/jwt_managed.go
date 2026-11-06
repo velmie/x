@@ -23,16 +23,19 @@ type ManagedJWTMethodOptions struct {
 	Log Logger
 }
 
-// NewManagedJWTMethod loads the initial keys before returning a ready method.
-// Canceling ctx stops managed refreshes and prevents subsequent key lookups.
-// The context must remain live for the lifetime of the method.
+// NewManagedJWTMethod loads the initial keys before returning a ready method by
+// default. With JWKSOptions.AllowInitialFetchFailure it can return successfully
+// before keys are available. Canceling ctx stops managed refreshes and prevents
+// subsequent key lookups. The context must remain live for the method's lifetime.
 func NewManagedJWTMethod(ctx context.Context, opts ManagedJWTMethodOptions) (*authentication.ViaJWT, error) {
 	method, _, err := NewManagedJWTMethodWithShutdown(ctx, opts)
 	return method, err
 }
 
-// NewManagedJWTMethodWithShutdown loads the initial keys and returns the method
-// with a function that cancels its source and waits for owned work to finish.
+// NewManagedJWTMethodWithShutdown starts the source and returns the method with
+// a function that cancels its source and waits for owned work to finish. By
+// default startup requires initial keys. JWKSOptions.AllowInitialFetchFailure
+// permits successful startup while keys are unavailable.
 // The context must remain live for the lifetime of the method.
 // The shutdown function is non-nil once a source exists, even if startup fails.
 // The caller should invoke it outside diagnostic callbacks, with a context that
