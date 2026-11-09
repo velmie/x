@@ -142,3 +142,11 @@ TLS 1.2 and 1.3 enabled and a certificate valid for `localhost`. Prepare the fic
 `connection_integration_test.go`. Set `MYSQL_INTEGRATION_HOST`, `MYSQL_INTEGRATION_PORT`, and `MYSQL_INTEGRATION_CA`,
 then run `go test -race -tags integration ./...`. Set `MYSQL_INTEGRATION_IPV6_HOST` to an unbracketed IPv6 address to
 also exercise IPv6. Tests skip when the fixture is not configured. Never target a production server.
+
+### Configuration validation errors
+
+`Config.Validate` returns `*validation.Error` for invalid settings. Violations
+name fields by their `k` configuration keys and contain the failed rule and
+parameter. The error unwraps to the original validator or TLS conflict cause.
+`ConfigFromEnv` also preserves errors from environment parsing and validation.
+The module requires Go 1.26 or later through its validation dependency.

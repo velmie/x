@@ -13,6 +13,8 @@ import (
 	"github.com/go-playground/validator/v10"
 	driver "github.com/go-sql-driver/mysql"
 	"github.com/velmie/x/envx"
+	"github.com/velmie/x/svc/apperror"
+	"github.com/velmie/x/svc/validation"
 )
 
 // Config holds database settings and optional native driver customization.
@@ -84,24 +86,8 @@ func (c *Config) Validate() error {
 	if err := c.validateTLS(); err != nil {
 		return err
 	}
-	if err := validator.New().Struct(c); err != nil {
-		var validationErrors validator.ValidationErrors
-		if !errors.As(err, &validationErrors) {
-			return fmt.Errorf("validate mysql configuration: %w", err)
-		}
-		details := make([]string, 0, len(validationErrors))
-		for _, field := range validationErrors {
-			constraint := field.Tag()
-			if field.Param() != "" {
-				constraint += "=" + field.Param()
-			}
-			details = append(details, field.Field()+": "+constraint)
-		}
 
-		return fmt.Errorf("invalid mysql configuration (%s): %w", strings.Join(details, ", "), err)
-	}
-
-	return nil
+	return validation.FromStruct(c, configValidator.Struct(c))
 }
 
 // LoadTLSConfig loads optional PEM roots and returns verified TLS 1.3 configuration.
@@ -129,7 +115,15 @@ func LoadTLSConfig(caFile, serverName string) (*tls.Config, error) {
 var (
 	errConflictingTLS = errors.New("unsafe_disable_tls cannot be combined with TLS certificate, server name, or TLSConfig")
 	errInvalidPEM     = errors.New("file must contain at least one PEM certificate")
+	configValidator   = newConfigValidator()
 )
+
+func newConfigValidator() *validator.Validate {
+	v := validator.New()
+	v.RegisterTagNameFunc(validation.FieldNames("k"))
+
+	return v
+}
 
 func configEnv(p *envx.Prototype, fieldName string) *envx.Variable {
 	field, _ := reflect.TypeOf(Config{}).FieldByName(fieldName)
@@ -143,7 +137,16 @@ func configEnv(p *envx.Prototype, fieldName string) *envx.Variable {
 
 func (c *Config) validateTLS() error {
 	if c.UnsafeDisableTLS && (c.TLSCertPath != "" || c.TLSServerName != "" || c.TLSConfig != nil) {
-		return errConflictingTLS
+		var failures validation.Error
+		failures.Add("unsafe_disable_tls", apperror.RuleEQ, "", errConflictingTLS)
+		if c.TLSCertPath != "" {
+			failures.Add("tls_cert_path", apperror.RuleEQ, "", nil)
+		}
+		if c.TLSServerName != "" {
+			failures.Add("tls_server_name", apperror.RuleEQ, "", nil)
+		}
+
+		return failures.Err()
 	}
 
 	return nil
