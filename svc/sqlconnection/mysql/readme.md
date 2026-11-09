@@ -150,3 +150,11 @@ name fields by their `k` configuration keys and contain the failed rule and
 parameter. The error unwraps to the original validator or TLS conflict cause.
 `ConfigFromEnv` also preserves errors from environment parsing and validation.
 The module requires Go 1.26 or later through its validation dependency.
+
+### Driver logging and UTC
+
+Use `WithDriverLogger` to route driver diagnostics through `slog` and
+`RequireUTC` to require UTC parsing and the UTC session time zone. Apply the
+UTC option after any options that modify time settings. The connection
+constructor enables `parseTime` and uses the driver's UTC location by default.
+See `ExampleWithDriverLogger` and `ExampleRequireUTC`.

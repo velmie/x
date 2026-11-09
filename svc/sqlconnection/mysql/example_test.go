@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 
@@ -95,3 +96,33 @@ func ExampleConfig_DriverOptions() {
 type exampleLogger struct{}
 
 func (exampleLogger) Info(string, ...any) {}
+
+func ExampleRequireUTC() {
+	cfg, err := driver.ParseDSN("/?parseTime=true")
+	if err != nil {
+		panic(err)
+	}
+	if err := cfg.Apply(mysql.RequireUTC()); err != nil {
+		panic(err)
+	}
+	fmt.Println(cfg.ParseTime, cfg.Loc, cfg.Params["time_zone"])
+	// Output: true UTC '+00:00'
+}
+
+func ExampleWithDriverLogger() {
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+
+			return attr
+		},
+	})
+	cfg := driver.NewConfig()
+	if err := cfg.Apply(mysql.WithDriverLogger(slog.New(handler))); err != nil {
+		panic(err)
+	}
+	cfg.Logger.Print(errors.New("connection interrupted"))
+	// Output: level=WARN msg="Database driver diagnostic" operation=manage_database component=database dependency=mysql stage=driver outcome=failed diagnostic="connection interrupted" error="connection interrupted"
+}
