@@ -91,14 +91,38 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 
 	tagName = normalizeTagName(tagName)
 
-	fields := make([]FieldDescriptor, 0)
-	collectFieldDescriptors(typeOf, "", nil, tagName, false, &fields)
-
-	defaults := collectTagDefaults(typeOf, "", tagName)
-	for i := range fields {
-		if def, ok := defaults[fields[i].Path]; ok {
-			fields[i].Default = normalizeDefault(def)
+	schema, err := walkSchema(typeOf, "", tagName)
+	if err != nil {
+		return FieldCollection{}, err
+	}
+	defaults := schemaDefaults(schema)
+	fields := make([]FieldDescriptor, 0, len(schema))
+	for _, item := range schema {
+		if item.container {
+			continue
 		}
+		tags := parseStructTags(item.field.Tag)
+		attributes := filterKnownTags(tags, tagName)
+		if item.sensitive {
+			if attributes == nil {
+				attributes = make(map[string]string)
+			}
+			attributes[sensitiveTag] = sensitiveTagEnabled
+		}
+		validation := strings.TrimSpace(tags["validate"])
+		descriptor := FieldDescriptor{
+			Path:       item.path,
+			Type:       item.field.Type,
+			Hint:       strings.TrimSpace(tags["hint"]),
+			Required:   hasValidateRequired(validation),
+			Validation: validation,
+			Attributes: attributes,
+			Index:      item.index,
+		}
+		if def, ok := defaults[item.path]; ok {
+			descriptor.Default = normalizeDefault(def)
+		}
+		fields = append(fields, descriptor)
 	}
 
 	sort.Slice(fields, func(i, j int) bool {
@@ -115,74 +139,6 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 		index:    index,
 		rootType: typeOf,
 	}, nil
-}
-
-func collectFieldDescriptors(
-	t reflect.Type,
-	prefix string,
-	index []int,
-	tagName string,
-	inheritedSensitive bool,
-	acc *[]FieldDescriptor,
-) {
-	if t == nil {
-		return
-	}
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return
-	}
-
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		currentIndex := appendIndex(index, i)
-		tags := parseStructTags(f.Tag)
-		tag := strings.TrimSpace(tags[tagName])
-		if tag == "" || tag == "-" {
-			continue
-		}
-
-		key := tag
-		if prefix != "" {
-			key = prefix + "." + tag
-		}
-
-		sensitive := inheritedSensitive || tags[sensitiveTag] == sensitiveTagEnabled
-		ft := f.Type
-		for ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != netURLPkg {
-			collectFieldDescriptors(ft, key, currentIndex, tagName, sensitive, acc)
-
-			continue
-		}
-
-		validation := strings.TrimSpace(tags["validate"])
-		required := hasValidateRequired(validation)
-
-		attributes := filterKnownTags(tags, tagName)
-		if sensitive {
-			if attributes == nil {
-				attributes = make(map[string]string)
-			}
-			attributes[sensitiveTag] = sensitiveTagEnabled
-		}
-		descriptor := FieldDescriptor{
-			Path:       key,
-			Type:       f.Type,
-			Hint:       strings.TrimSpace(tags["hint"]),
-			Required:   required,
-			Validation: validation,
-			Attributes: attributes,
-			Index:      currentIndex,
-		}
-
-		*acc = append(*acc, descriptor)
-	}
 }
 
 func hasValidateRequired(tag string) bool {

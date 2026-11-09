@@ -372,17 +372,37 @@ func (l *Loader) unmarshal(prefix string, target any) error {
 
 	targetType := rv.Type().Elem()
 	tagName := normalizeTagName(l.opts.TagName)
-	keys := collectTaggedKeys(targetType, prefix, tagName)
-
-	// Defaults from struct tags have the lowest priority.
-	tagDefaults := collectTagDefaults(targetType, prefix, tagName)
-
+	fields, err := walkSchema(targetType, prefix, tagName)
+	if err != nil {
+		return err
+	}
+	var keys []string
 	var allowedKeys map[string]struct{}
 	var wildcardPrefixes []string
 	if l.opts.Strict {
-		allowedKeys = collectAllowedKeys(targetType, prefix, tagName)
-		wildcardPrefixes = collectMapPrefixes(targetType, prefix, tagName)
+		allowedKeys = make(map[string]struct{})
 	}
+	for _, field := range fields {
+		if field.container {
+			continue
+		}
+		keys = append(keys, field.path)
+		if allowedKeys != nil {
+			allowedKeys[field.path] = struct{}{}
+			for parent := parentPath(field.path); parent != ""; parent = parentPath(parent) {
+				allowedKeys[parent] = struct{}{}
+			}
+			fieldType := field.field.Type
+			for fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Map {
+				wildcardPrefixes = append(wildcardPrefixes, field.path)
+			}
+		}
+	}
+	sort.Strings(keys)
+	tagDefaults := schemaDefaults(fields)
 
 	k, err := l.snapshot(keys, tagDefaults, allowedKeys, wildcardPrefixes, prefix)
 	if err != nil {
@@ -703,194 +723,6 @@ func (l *Loader) loadOverrides(k *koanf.Koanf, origins map[string]ValueOrigin) e
 	recordOrigins(overrides, ValueOrigin{Source: SourceOverride}, origins)
 
 	return nil
-}
-
-func collectTaggedKeys(t reflect.Type, prefix, tagName string) []string {
-	acc := make(map[string]struct{})
-	collectKeys(t, prefix, tagName, acc)
-
-	out := make([]string, 0, len(acc))
-	for key := range acc {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-
-	return out
-}
-
-func collectAllowedKeys(t reflect.Type, prefix, tagName string) map[string]struct{} {
-	keys := collectTaggedKeys(t, prefix, tagName)
-	out := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		out[key] = struct{}{}
-		for parent := parentPath(key); parent != ""; parent = parentPath(parent) {
-			out[parent] = struct{}{}
-		}
-	}
-
-	return out
-}
-
-func collectMapPrefixes(t reflect.Type, prefix, tagName string) []string {
-	acc := make(map[string]struct{})
-	collectMapPrefixesInto(t, prefix, tagName, acc)
-
-	out := make([]string, 0, len(acc))
-	for key := range acc {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-
-	return out
-}
-
-func collectKeys(t reflect.Type, prefix, tagName string, acc map[string]struct{}) {
-	if t == nil {
-		return
-	}
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		if prefix != "" {
-			acc[prefix] = struct{}{}
-		}
-
-		return
-	}
-
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		tag := strings.TrimSpace(f.Tag.Get(tagName))
-		if tag == "" || tag == "-" {
-			continue
-		}
-
-		key := tag
-		if prefix != "" {
-			key = prefix + "." + tag
-		}
-
-		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != netURLPkg {
-			collectKeys(ft, key, tagName, acc)
-
-			continue
-		}
-
-		acc[key] = struct{}{}
-	}
-}
-
-func collectMapPrefixesInto(t reflect.Type, prefix, tagName string, acc map[string]struct{}) {
-	if t == nil {
-		return
-	}
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return
-	}
-
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		tag := strings.TrimSpace(f.Tag.Get(tagName))
-		if tag == "" || tag == "-" {
-			continue
-		}
-
-		key := tag
-		if prefix != "" {
-			key = prefix + "." + tag
-		}
-
-		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-
-		if ft.Kind() == reflect.Map {
-			acc[key] = struct{}{}
-			continue
-		}
-
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != netURLPkg {
-			collectMapPrefixesInto(ft, key, tagName, acc)
-		}
-	}
-}
-
-// collectTagDefaults traverses the struct fields and collects tagged defaults.
-func collectTagDefaults(t reflect.Type, prefix, tagName string) map[string]any {
-	acc := make(map[string]any)
-	collectTagDefaultsInto(t, prefix, tagName, acc)
-
-	return acc
-}
-
-func collectTagDefaultsInto(t reflect.Type, prefix, tagName string, acc map[string]any) {
-	if t == nil {
-		return
-	}
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return
-	}
-
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		tag := strings.TrimSpace(f.Tag.Get(tagName))
-		if tag == "" || tag == "-" {
-			continue
-		}
-
-		key := tag
-		if prefix != "" {
-			key = prefix + "." + tag
-		}
-
-		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-
-		// net/url.URL contains internal fields, but for us it is a leaf.
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != "net/url" {
-			collectTagDefaultsInto(ft, key, tagName, acc)
-
-			continue
-		}
-
-		defVal, ok := f.Tag.Lookup("default")
-		if !ok {
-			continue
-		}
-
-		if ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
-			sep := f.Tag.Get("default_sep")
-			if sep == "" {
-				sep = ","
-			}
-			parts := strings.Split(defVal, sep)
-			list := make([]any, 0, len(parts))
-			for _, p := range parts {
-				list = append(list, strings.TrimSpace(p))
-			}
-
-			acc[key] = list
-
-			continue
-		}
-
-		acc[key] = defVal
-	}
 }
 
 func envName(prefix, dotted string) string {

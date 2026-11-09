@@ -58,7 +58,11 @@ func (l *Loader) Inspect(
 	opts InspectOptions,
 ) ([]InspectionField, error) {
 	k := koanf.New(".")
-	tagDefaults := collectTagDefaults(fields.rootType, "", normalizeTagName(l.opts.TagName))
+	schema, err := walkSchema(fields.rootType, "", normalizeTagName(l.opts.TagName))
+	if err != nil {
+		return nil, err
+	}
+	tagDefaults := schemaDefaults(schema)
 	if err := l.loadStructTagDefaults(k, tagDefaults, nil); err != nil {
 		return nil, err
 	}

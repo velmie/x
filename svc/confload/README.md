@@ -125,6 +125,12 @@ confload builds a combined configuration tree by applying sources in this order:
 
 Later sources override earlier ones. This makes it easy to set safe defaults and then customize per deployment.
 
+An exported embedded struct value can place its fields in the containing
+namespace with `k:",squash"`. The flattened paths apply to sources, environment
+variables, defaults and inspection. Duplicate paths and leaf/container conflicts
+are rejected before sources are read. Squash is explicit and does not support
+embedded pointers or maps.
+
 ## Core API
 
 ### Loader
