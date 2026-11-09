@@ -89,3 +89,24 @@ Returning shutdown errors is a change in public behavior: `Serve` can now return
 an error after a successful startup and an explicit stop request or signal.
 Previously these shutdown errors were only logged. Public method signatures and
 interfaces remain unchanged.
+
+## Supervising long-running components
+
+Use `Run` for functions that run until their context is canceled and join their
+own work before returning. Each component needs a unique, nonempty name and a
+non-nil function. A return before shutdown requests cancellation of its peers,
+including a nil return. The call waits for all components and returns retained
+errors with their names in declaration order. During shutdown, nil and the exact
+context error are normal; wrapped or joined errors are preserved. The caller
+owns signals, logging and shutdown timeouts.
+
+```go
+err := bootstrap.Run(ctx, bootstrap.Component{
+    Name: "worker",
+    Run: worker.Run,
+})
+```
+
+This contract differs from `Orchestrator`: a component's function must remain
+active and perform its own shutdown, while `Service.Start` may return after
+startup and `Service.Stop` owns joining.
