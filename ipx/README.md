@@ -38,3 +38,9 @@ Parsing errors wrap the original `netip` cause.
 `RealIPGetter` and its methods remain available with their existing behavior.
 It uses a different left-to-right and private-address filtering algorithm, so
 migrating to `ResolveClientAddress` requires an explicit trust-policy change.
+
+### Trusted proxy networks
+
+`ParseTrustedProxies` parses a comma-separated list of canonical CIDR networks
+into prefixes for `ProxyPolicy`. It rejects empty entries and host bits, and
+normalizes IPv4-mapped IPv6 prefixes to IPv4. See `ExampleParseTrustedProxies`.
