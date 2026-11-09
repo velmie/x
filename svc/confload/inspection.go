@@ -7,6 +7,8 @@ import (
 	"io"
 	"reflect"
 	"strconv"
+
+	"github.com/knadh/koanf/v2"
 )
 
 const (
@@ -44,6 +46,43 @@ func Inspect(
 	snapshot Snapshot,
 	opts InspectOptions,
 ) ([]InspectionField, error) {
+	return inspect(fields, decoded, snapshot, opts, nil, nil)
+}
+
+// Inspect describes fields using the loader's configured defaults and environment names.
+// It does not read configuration sources or invoke decode hooks.
+func (l *Loader) Inspect(
+	fields FieldCollection,
+	decoded any,
+	snapshot Snapshot,
+	opts InspectOptions,
+) ([]InspectionField, error) {
+	k := koanf.New(".")
+	tagDefaults := collectTagDefaults(fields.rootType, "", normalizeTagName(l.opts.TagName))
+	if err := l.loadStructTagDefaults(k, tagDefaults, nil); err != nil {
+		return nil, err
+	}
+	if err := l.loadDefaults(k, nil); err != nil {
+		return nil, err
+	}
+	provided := koanf.New(".")
+	if err := l.loadDefaults(provided, nil); err != nil {
+		return nil, err
+	}
+	if opts.EnvName == nil {
+		opts.EnvName = l.EnvName
+	}
+	return inspect(fields, decoded, snapshot, opts, k, provided)
+}
+
+func inspect(
+	fields FieldCollection,
+	decoded any,
+	snapshot Snapshot,
+	opts InspectOptions,
+	defaults *koanf.Koanf,
+	provided *koanf.Koanf,
+) ([]InspectionField, error) {
 	var root reflect.Value
 	if decoded != nil {
 		root = reflect.ValueOf(decoded)
@@ -66,6 +105,12 @@ func Inspect(
 		sensitive := field.Attributes[sensitiveTag] == sensitiveTagEnabled
 		if sensitive {
 			field.Default = inspectionRedacted
+		} else if defaults != nil {
+			if !defaults.Exists(field.Path) {
+				field.Default = nil
+			} else if provided.Exists(field.Path) {
+				field.Default = defaults.Get(field.Path)
+			}
 		}
 		row := InspectionField{
 			Field: field,

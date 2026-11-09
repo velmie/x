@@ -560,7 +560,7 @@ func (l *Loader) loadSources(k *koanf.Koanf, origins map[string]ValueOrigin) ([]
 func loadFile(k *koanf.Koanf, path string, origins map[string]ValueOrigin, optional bool) (bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return false, nil
+		return false, errors.New("configuration file path is empty")
 	}
 
 	cleanPath := filepath.Clean(path)

@@ -13,8 +13,7 @@ fields, err := confload.DescribeStruct[Config]()
 if err != nil {
     return err
 }
-rows, err := confload.Inspect(fields, cfg, snapshot, confload.InspectOptions{
-    EnvName: loader.EnvName,
+rows, err := loader.Inspect(fields, cfg, snapshot, confload.InspectOptions{
     OverrideLabel: "cli",
 })
 if err != nil {
@@ -23,10 +22,13 @@ if err != nil {
 return confload.WriteInspection(out, format, rows)
 ```
 
-Use `Inspect(fields, nil, confload.Snapshot{}, opts)` for schema-only output.
+Use `loader.Inspect(fields, nil, confload.Snapshot{}, opts)` for schema-only output.
+The loader method includes defaults supplied through `WithDefaults` and uses
+the loader environment names unless overridden. Package-level `Inspect` keeps
+its tag-default-only behavior.
 Inspection performs no source loading and never reads `Snapshot.Values`. It
 reads the decoded struct, so zero values are retained and nil nested pointers
-are shown as null. Pass `loader.EnvName` to respect its prefix and aliases.
+are shown as null.
 
 Mark sensitive fields or their containing structs with `sensitive:"true"`.
 Inspection masks both defaults and values as `[REDACTED]` before formatting or
@@ -202,7 +204,8 @@ loader := confload.New(
 )
 ```
 
-Files and readers are loaded in the order they are added to the loader.
+Files and readers are loaded in the order they are added to the loader. An explicitly
+blank required or optional file path is an error. Supplying no paths adds no files.
 
 ### Optional files
 
@@ -232,7 +235,10 @@ Set a prefix, then use dotted keys that map to upper snake case.
 loader := confload.New(confload.WithEnvPrefix("APP_"))
 ```
 
-For example, `db.host` becomes `APP_DB_HOST`.
+For example, `db.host` becomes `APP_DB_HOST`. A present empty value overrides
+lower-priority sources. Blank numeric strings, including whitespace-only values,
+are invalid; use `0` for zero. A later override can replace a blank value before
+decoding. Empty strings remain available to string fields.
 
 Lists can be supplied as indexed environment variables. Indexes must start at 0.
 
@@ -311,6 +317,9 @@ hook := func(from, to reflect.Type, data any) (any, error) {
 
 loader := confload.New(confload.WithDecodeHooks(hook))
 ```
+
+To decode JSON objects in strings into `map[string]string`, explicitly install
+`confload.JSONStringMapHook()` with `WithDecodeHooks`.
 
 ### Strict mode
 

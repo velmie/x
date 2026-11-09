@@ -1,6 +1,7 @@
 package confload
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-viper/mapstructure/v2"
 )
 
 var (
@@ -15,6 +18,24 @@ var (
 	errInvalidAbsoluteURL = errors.New("invalid absolute URL (scheme and host required)")
 	errInvalidBool        = errors.New("invalid boolean value")
 )
+
+// JSONStringMapHook decodes JSON strings into map[string]string values.
+// It leaves other source and destination types unchanged.
+func JSONStringMapHook() mapstructure.DecodeHookFunc {
+	return func(from, to reflect.Type, data any) (any, error) {
+		if from.Kind() != reflect.String || to != reflect.TypeFor[map[string]string]() {
+			return data, nil
+		}
+		var values map[string]string
+		if err := json.Unmarshal([]byte(data.(string)), &values); err != nil {
+			return nil, fmt.Errorf("invalid configuration map: %w", err)
+		}
+		if values == nil {
+			return nil, errors.New("invalid configuration map")
+		}
+		return values, nil
+	}
+}
 
 func stringToURLHook(_, to reflect.Type, data any) (any, error) {
 	if to != urlType {
@@ -76,9 +97,6 @@ func stringToNumberHook(from, to reflect.Type, data any) (any, error) {
 
 	switch to.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if raw == "" {
-			return 0, nil
-		}
 		val, err := strconv.ParseInt(raw, 10, to.Bits())
 		if err != nil {
 			return nil, fmt.Errorf("expected %s as a signed base-10 integer: %w", to, err.(*strconv.NumError).Err)
@@ -86,9 +104,6 @@ func stringToNumberHook(from, to reflect.Type, data any) (any, error) {
 
 		return val, nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if raw == "" {
-			return 0, nil
-		}
 		val, err := strconv.ParseUint(raw, 10, to.Bits())
 		if err != nil {
 			return nil, fmt.Errorf("expected %s as an unsigned base-10 integer: %w", to, err.(*strconv.NumError).Err)
@@ -113,9 +128,6 @@ func stringToFloatHook(from, to reflect.Type, data any) (any, error) {
 
 	switch to.Kind() {
 	case reflect.Float32, reflect.Float64:
-		if raw == "" {
-			return 0.0, nil
-		}
 		val, err := strconv.ParseFloat(raw, to.Bits())
 		if err != nil {
 			return nil, fmt.Errorf("expected %s as a floating-point number: %w", to, err.(*strconv.NumError).Err)
