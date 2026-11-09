@@ -1,6 +1,8 @@
 // Package validation provides declarative validation and strict decoding.
 // DecodeQuery binds flat URL queries to tagged DTOs and validates them using
-// a caller-configured validator.
+// a caller-configured validator. FromStruct converts validator failures into
+// field diagnostics, Error collects checks, Invalid reports one plain-Go check,
+// and At prefixes paths.
 package validation
 
 import (

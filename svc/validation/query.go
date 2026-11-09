@@ -234,7 +234,7 @@ func invalidQueryField(name, detail string) error {
 	return fmt.Errorf("invalid query DTO field %s: %s", name, detail)
 }
 
-func queryType(typ reflect.Type) (expected string, ordinaryScalar bool, ok bool) {
+func queryType(typ reflect.Type) (expected string, ordinaryScalar, ok bool) {
 	text := queryTextType(typ)
 	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()

@@ -104,3 +104,12 @@ aliases) and `Param()`. It does not copy rejected values or supply messages. The
 root must have the validated root struct's type, as a value or pointer. Paths can include map keys
 and parameters can contain rule configuration, so ensure both are safe to expose.
 An `InvalidValidationError` is a programming failure, not a field violation.
+
+## Field diagnostics
+
+A zero `Error` collects native validation failures with `AddStruct` and plain
+Go checks with `Add`. Both retain their causes. `Err` returns nil when the
+collector is empty. `FromStruct` converts one native result, while `Invalid`
+reports one plain check. `At` copies an error and prefixes its field paths for
+a containing section. Paths and rule parameters must be safe to expose.
+Rejected values are not included in the generated violations.
