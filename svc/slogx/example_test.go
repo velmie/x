@@ -73,3 +73,16 @@ func ExampleDefaultSecretKeys() {
 	// cookie
 	// set-cookie
 }
+
+func ExampleNewHandler() {
+	handler, err := slogx.NewHandler(os.Stdout, slogx.Config{Format: "text"})
+	if err != nil {
+		panic(err)
+	}
+	record := slog.NewRecord(time.Time{}, slog.LevelInfo, "ready", 0)
+	record.AddAttrs(slog.String("password", "secret"))
+	if err := handler.Handle(context.Background(), record); err != nil {
+		panic(err)
+	}
+	// Output: level=INFO msg=ready password=[REDACTED]
+}

@@ -76,3 +76,8 @@ Use `replace` as the handler's `ReplaceAttr`.
 
 The module requires Go 1.21 or newer and has no dependencies outside the standard library. It starts no goroutines,
 performs no I/O, changes no globals, and requires no cleanup. Adding a default key is a documented release change.
+
+Use `NewHandler` to select the standard JSON or text handler and secret-key
+redaction from configuration. Empty settings select JSON and info. The handler
+can be composed with other `slog.Handler` implementations by the application.
+See `ExampleNewHandler` for a runnable example.
