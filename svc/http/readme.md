@@ -86,3 +86,26 @@ Probe names and custom reasons must be stable, bounded, and safe for publication
 The handler logs original failure causes once per failed component. The service's
 logging adapter owns redaction of sensitive values in those causes. A probe panic
 propagates to surrounding recovery middleware.
+
+## Operational listener
+
+Use a separate mux for operational traffic and keep its network exposure under
+operator control. `RegisterOperationalRoutes` mounts the required readiness
+handler at `/readyz`, a JSON-encodable caller-owned identity at `/build`, and an
+optional metrics handler at `/metrics`. These routes accept GET and HEAD. Other
+methods receive 405 without invoking probes or metrics. Build and readiness
+responses use the standard envelope and `Cache-Control: no-store`.
+
+```go
+operationalMux := http.NewServeMux()
+server.RegisterOperationalRoutes(operationalMux, logger, server.OperationalRoutes{
+    Readiness: health.NewHandler(logger, health.HandlerOptions{}, databaseProbe),
+    Build: buildInfo,
+    Metrics: metricsHandler, // nil leaves /metrics unregistered
+})
+operationalHandler := server.Recover(logger, operationalMux, server.RecoveryOptions{})
+```
+
+`health.NewLivenessHandler(logger)` reports a simple healthy status without
+sampling dependencies. Mount it on the public listener when needed. Both
+helpers only construct handlers; the caller creates listeners and owns shutdown.
