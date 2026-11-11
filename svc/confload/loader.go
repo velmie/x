@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -377,35 +378,15 @@ func (l *Loader) unmarshal(prefix string, target any) error {
 		return err
 	}
 	var keys []string
-	var allowedKeys map[string]struct{}
-	var wildcardPrefixes []string
-	if l.opts.Strict {
-		allowedKeys = make(map[string]struct{})
-	}
 	for i := range fields {
-		field := &fields[i]
-		if field.container {
-			continue
-		}
-		keys = append(keys, field.path)
-		if allowedKeys != nil {
-			allowedKeys[field.path] = struct{}{}
-			for parent := parentPath(field.path); parent != ""; parent = parentPath(parent) {
-				allowedKeys[parent] = struct{}{}
-			}
-			fieldType := field.field.Type
-			for fieldType.Kind() == reflect.Pointer {
-				fieldType = fieldType.Elem()
-			}
-			if fieldType.Kind() == reflect.Map {
-				wildcardPrefixes = append(wildcardPrefixes, field.path)
-			}
+		if !fields[i].container {
+			keys = append(keys, fields[i].path)
 		}
 	}
 	sort.Strings(keys)
 	tagDefaults := schemaDefaults(fields)
 
-	k, err := l.snapshot(keys, tagDefaults, allowedKeys, wildcardPrefixes, prefix)
+	k, err := l.snapshot(keys, tagDefaults, fields, prefix)
 	if err != nil {
 		return err
 	}
@@ -446,12 +427,12 @@ func (l *Loader) unmarshal(prefix string, target any) error {
 func (l *Loader) snapshot(
 	keys []string,
 	tagDefaults map[string]any,
-	allowedKeys map[string]struct{},
-	wildcardPrefixes []string,
+	fields []schemaField,
 	prefix string,
 ) (*koanf.Koanf, error) {
 	k := koanf.New(".")
 	origins := make(map[string]ValueOrigin)
+	boundaryOrigins := make(map[string]ValueOrigin)
 	files := make([]string, 0)
 
 	if err := l.loadStructTagDefaults(k, tagDefaults, origins); err != nil {
@@ -461,27 +442,36 @@ func (l *Loader) snapshot(
 	if err := l.loadDefaults(k, origins); err != nil {
 		return nil, err
 	}
+	for key, value := range tagDefaults {
+		recordTreeOrigins(reflect.ValueOf(value), key, ValueOrigin{Source: SourceStructDefault}, boundaryOrigins)
+	}
+	for key, value := range l.opts.Defaults {
+		recordTreeOrigins(reflect.ValueOf(value), key, ValueOrigin{Source: SourceDefaults}, boundaryOrigins)
+	}
 
-	loadedFiles, err := l.loadSources(k, origins)
+	loadedFiles, err := l.loadSources(k, origins, boundaryOrigins)
 	if err != nil {
 		return nil, err
 	}
 	files = append(files, loadedFiles...)
 
-	if err := l.loadEnv(k, keys, origins); err != nil {
+	if err := l.loadEnv(k, keys, origins, boundaryOrigins); err != nil {
 		return nil, err
 	}
 
-	if err := l.loadFlags(k, origins); err != nil {
+	if err := l.loadFlags(k, origins, boundaryOrigins); err != nil {
 		return nil, err
 	}
 
 	if err := l.loadOverrides(k, origins); err != nil {
 		return nil, err
 	}
+	for key, value := range l.opts.Overrides {
+		recordTreeOrigins(reflect.ValueOf(value), key, ValueOrigin{Source: SourceOverride}, boundaryOrigins)
+	}
 
-	if allowedKeys != nil {
-		if err := validateStrict(k, origins, allowedKeys, wildcardPrefixes, prefix); err != nil {
+	if l.opts.Strict {
+		if err := validateStrict(k, origins, boundaryOrigins, fields, prefix, normalizeTagName(l.opts.TagName)); err != nil {
 			return nil, err
 		}
 	}
@@ -535,12 +525,12 @@ func (l *Loader) loadDefaults(k *koanf.Koanf, origins map[string]ValueOrigin) er
 	return nil
 }
 
-func (l *Loader) loadSources(k *koanf.Koanf, origins map[string]ValueOrigin) ([]string, error) {
+func (l *Loader) loadSources(k *koanf.Koanf, origins, boundaryOrigins map[string]ValueOrigin) ([]string, error) {
 	loaded := make([]string, 0, len(l.opts.Sources)+1)
 	for _, source := range l.opts.Sources {
 		switch source.kind {
 		case sourceFile:
-			ok, err := loadFile(k, source.path, origins, source.optional)
+			ok, err := loadFile(k, source.path, origins, boundaryOrigins, source.optional)
 			if err != nil {
 				return nil, err
 			}
@@ -555,7 +545,7 @@ func (l *Loader) loadSources(k *koanf.Koanf, origins map[string]ValueOrigin) ([]
 			if source.readErr != nil {
 				return nil, fmt.Errorf("read config reader %q: %w", name, source.readErr)
 			}
-			ok, err := loadReader(k, name, source.data, origins)
+			ok, err := loadReader(k, name, source.data, origins, boundaryOrigins)
 			if err != nil {
 				return nil, err
 			}
@@ -566,7 +556,7 @@ func (l *Loader) loadSources(k *koanf.Koanf, origins map[string]ValueOrigin) ([]
 	}
 
 	if envPath := strings.TrimSpace(os.Getenv(l.opts.ConfigFileEnv)); envPath != "" {
-		ok, err := loadFile(k, envPath, origins, false)
+		ok, err := loadFile(k, envPath, origins, boundaryOrigins, false)
 		if err != nil {
 			return nil, err
 		}
@@ -578,7 +568,7 @@ func (l *Loader) loadSources(k *koanf.Koanf, origins map[string]ValueOrigin) ([]
 	return loaded, nil
 }
 
-func loadFile(k *koanf.Koanf, path string, origins map[string]ValueOrigin, optional bool) (bool, error) {
+func loadFile(k *koanf.Koanf, path string, origins, boundaryOrigins map[string]ValueOrigin, optional bool) (bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return false, errors.New("configuration file path is empty")
@@ -608,14 +598,16 @@ func loadFile(k *koanf.Koanf, path string, origins map[string]ValueOrigin, optio
 	if origins != nil {
 		kFile := koanf.New(".")
 		if err := kFile.Load(file.Provider(cleanPath), parser); err == nil {
-			recordOrigins(flattenKoanf(kFile), ValueOrigin{Source: SourceFile, Identifier: cleanPath}, origins)
+			origin := ValueOrigin{Source: SourceFile, Identifier: cleanPath}
+			recordOrigins(flattenKoanf(kFile), origin, origins)
+			recordTreeOrigins(reflect.ValueOf(kFile.Get("")), "", origin, boundaryOrigins)
 		}
 	}
 
 	return true, nil
 }
 
-func loadReader(k *koanf.Koanf, name string, data []byte, origins map[string]ValueOrigin) (bool, error) {
+func loadReader(k *koanf.Koanf, name string, data []byte, origins, boundaryOrigins map[string]ValueOrigin) (bool, error) {
 	parser, err := parserForPath(name)
 	if err != nil {
 		return false, err
@@ -628,7 +620,9 @@ func loadReader(k *koanf.Koanf, name string, data []byte, origins map[string]Val
 	if origins != nil {
 		kReader := koanf.New(".")
 		if err := kReader.Load(rawbytes.Provider(data), parser); err == nil {
-			recordOrigins(flattenKoanf(kReader), ValueOrigin{Source: SourceReader, Identifier: name}, origins)
+			origin := ValueOrigin{Source: SourceReader, Identifier: name}
+			recordOrigins(flattenKoanf(kReader), origin, origins)
+			recordTreeOrigins(reflect.ValueOf(kReader.Get("")), "", origin, boundaryOrigins)
 		}
 	}
 
@@ -652,7 +646,7 @@ func parserForPath(path string) (koanf.Parser, error) {
 	}
 }
 
-func (l *Loader) loadFlags(k *koanf.Koanf, origins map[string]ValueOrigin) error {
+func (l *Loader) loadFlags(k *koanf.Koanf, origins, boundaryOrigins map[string]ValueOrigin) error {
 	if l.opts.FlagSet == nil {
 		return nil
 	}
@@ -684,12 +678,13 @@ func (l *Loader) loadFlags(k *koanf.Koanf, origins map[string]ValueOrigin) error
 	for key := range values {
 		origin := ValueOrigin{Source: SourceFlag, Identifier: identifiers[key]}
 		origins[key] = origin
+		recordTreeOrigins(reflect.ValueOf(values[key]), key, origin, boundaryOrigins)
 	}
 
 	return nil
 }
 
-func (l *Loader) loadEnv(k *koanf.Koanf, keys []string, origins map[string]ValueOrigin) error {
+func (l *Loader) loadEnv(k *koanf.Koanf, keys []string, origins, boundaryOrigins map[string]ValueOrigin) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -703,10 +698,12 @@ func (l *Loader) loadEnv(k *koanf.Koanf, keys []string, origins map[string]Value
 		return fmt.Errorf("load environment configuration: %w", err)
 	}
 	for key := range values {
-		origins[key] = ValueOrigin{
+		origin := ValueOrigin{
 			Source:     SourceEnv,
 			Identifier: envNameForKey(l.opts.EnvPrefix, key, l.opts.EnvKeyFunc, l.opts.EnvAliases),
 		}
+		origins[key] = origin
+		recordTreeOrigins(reflect.ValueOf(values[key]), key, origin, boundaryOrigins)
 	}
 
 	return nil
@@ -897,3 +894,34 @@ func uniqueStrings(values []string) []string {
 }
 
 const netURLPkg = "net/url"
+
+func recordTreeOrigins(v reflect.Value, path string, origin ValueOrigin, origins map[string]ValueOrigin) {
+	v = indirectValue(v)
+	if path != "" {
+		if _, ok := origins[path]; !ok {
+			origins[path] = origin
+		}
+	}
+	if v.IsValid() && v.Kind() == reflect.Map && v.Type().Key().Kind() == reflect.String && v.Len() > 0 {
+		iter := v.MapRange()
+		for iter.Next() {
+			recordTreeOrigins(iter.Value(), configurationPath(path, iter.Key().String()), origin, origins)
+		}
+		return
+	}
+	if path != "" {
+		if !v.IsValid() || v.Kind() != reflect.Map {
+			for key := range origins {
+				if strings.HasPrefix(key, path+".") || strings.HasPrefix(key, path+"[") {
+					delete(origins, key)
+				}
+			}
+		}
+		origins[path] = origin
+	}
+	if v.IsValid() && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) {
+		for i := 0; i < v.Len(); i++ {
+			recordTreeOrigins(v.Index(i), path+"."+strconv.Itoa(i), origin, origins)
+		}
+	}
+}

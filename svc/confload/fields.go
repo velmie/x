@@ -177,6 +177,7 @@ func schemaDefaults(fields []schemaField) map[string]any {
 // schemaNode represents a collection or the fields of a structured element.
 type schemaNode struct {
 	kind    reflect.Kind
+	typ     reflect.Type
 	fields  []schemaField
 	element *schemaNode
 }
@@ -185,7 +186,7 @@ func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, 
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	node := &schemaNode{kind: t.Kind()}
+	node := &schemaNode{kind: t.Kind(), typ: t}
 	switch t.Kind() {
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
