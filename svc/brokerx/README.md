@@ -64,3 +64,18 @@ handler = brokerx.WrapProcessing(handler, logger, brokerx.ProcessingConfig{
 
 Tracing observes the classified outcome and supplies the context used for logs
 and the callback. The supplied trace middleware must preserve results.
+
+Bind a native consumer to the service lifecycle after constructing the handler:
+
+```go
+component, err := brokerx.ConsumerComponent("orders", consumer, handler)
+if err != nil {
+    return err
+}
+// Include component in bootstrap.Run. Close the consumer's dependencies after
+// the run has returned and joined its work.
+```
+
+The binding validates handler requirements before returning. Its run function
+calls the native consumer's `RunService` and preserves its error. The creator
+retains ownership of the consumer and its dependencies.

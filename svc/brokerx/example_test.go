@@ -97,3 +97,16 @@ func ExampleWrapProcessing() {
 	fmt.Println(handled)
 	// Output: true
 }
+
+func ExampleConsumerComponent() {
+	consumer := testConsumer{
+		validate: func(...broker.Requirement) error { return nil },
+		run:      func(context.Context, broker.Handler) error { return nil },
+	}
+	handler := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
+		return broker.Handled{}, nil
+	})
+	component, err := brokerx.ConsumerComponent("orders", consumer, handler)
+	fmt.Println(component.Name, err)
+	// Output: orders <nil>
+}
