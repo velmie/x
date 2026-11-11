@@ -30,7 +30,7 @@ type ServiceConfig struct {
 	LocalPlaintext  bool              `k:"local_plaintext" default:"false" hint:"Permit plaintext to literal loopback addresses"`
 	MetricsMode     string            `k:"metrics_mode" default:"otlp" hint:"Metric collection mode" validate:"omitempty,oneof=otlp prometheus"`
 	BatchTimeout    time.Duration     `k:"batch_timeout" default:"100ms" hint:"Span batch delay" validate:"gte=0"`
-	MetricInterval  time.Duration     `k:"metric_interval" default:"1s" hint:"Periodic metric export interval" validate:"gte=0"`
+	MetricInterval  time.Duration     `k:"metric_interval" default:"1s" hint:"OTLP metric export interval; unused in Prometheus mode" validate:"gte=0"`
 	ExportTimeout   time.Duration     `k:"export_timeout" default:"1s" hint:"Timeout for each telemetry export" validate:"gte=0"`
 	RuntimeMetrics  bool              `k:"runtime_metrics" default:"false" hint:"Go and process collectors in Prometheus mode"`
 }

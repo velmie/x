@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,11 @@ func TestServiceConfigOnlyValidationAndIdentity(t *testing.T) {
 	}
 	_, err := otelx.SetupService(t.Context(), cfg, resource.NewSchemaless(attribute.String("service.name", "test"), attribute.String("service.version", "1")))
 	var validationErr *validation.Error
-	if !errors.Is(err, otelx.ErrInvalidConfig) || errors.As(err, &validationErr) || !strings.Contains(err.Error(), "OTEL_RESOURCE_ATTRIBUTES") || !strings.Contains(err.Error(), "unset") {
-		t.Fatalf("environment failure: %v", err)
+	if !errors.Is(err, otelx.ErrInvalidConfig) || errors.As(err, &validationErr) {
+		t.Fatalf("environment failure is not a plain configuration error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "OTEL_RESOURCE_ATTRIBUTES") || !strings.Contains(err.Error(), "unset") {
+		t.Fatalf("environment failure does not name the variable and expectation: %v", err)
 	}
 	if err := os.Unsetenv("OTEL_RESOURCE_ATTRIBUTES"); err != nil {
 		t.Fatal(err)
@@ -71,8 +75,11 @@ func TestServiceConfigOnlyValidationAndIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := otelx.SetupService(t.Context(), cfg, tc.res)
 			var failure *validation.Error
-			if !errors.Is(err, otelx.ErrInvalidConfig) || errors.As(err, &failure) || !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), "128") {
-				t.Fatalf("identity failure: %v", err)
+			if !errors.Is(err, otelx.ErrInvalidConfig) || errors.As(err, &failure) {
+				t.Fatalf("identity failure is not a plain configuration error: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.field) || !strings.Contains(err.Error(), "128") {
+				t.Fatalf("identity failure does not name the attribute and format: %v", err)
 			}
 		})
 	}
@@ -243,5 +250,24 @@ func TestServiceConfiguredExportTimeout(t *testing.T) {
 	case <-canceled:
 	case <-time.After(750 * time.Millisecond):
 		t.Fatal("export was not canceled within configured timeout")
+	}
+}
+
+func TestServiceEmptyResourceAttributesAreUnset(t *testing.T) {
+	cfg := otelx.ServiceConfig{
+		Enabled:       true,
+		TraceProtocol: "stdout",
+		StdoutFile:    filepath.Join(t.TempDir(), "traces.json"),
+		MetricsMode:   "prometheus",
+		Environment:   "test",
+	}
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	identity := resource.NewSchemaless(attribute.String("service.name", "test"), attribute.String("service.version", "1"))
+	runtime, err := otelx.SetupService(t.Context(), cfg, identity)
+	if err != nil {
+		t.Fatalf("empty OTEL_RESOURCE_ATTRIBUTES must behave as unset: %v", err)
+	}
+	if err := runtime.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

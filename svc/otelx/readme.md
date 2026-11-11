@@ -40,7 +40,8 @@ return errors.Join(runErr, runtime.Shutdown(shutdownCtx))
 ```
 
 The `batch_timeout` (default `100ms`) controls span batch delay.
-`metric_interval` (default `1s`) controls periodic metrics collection, and
+`metric_interval` (default `1s`) controls periodic OTLP metric export and is
+unused in Prometheus mode, where scrapes drive collection, and
 `export_timeout` (default `1s`) bounds each span and metric export, the
 collector HTTP client, and the gRPC exporter. Zero uses the default and
 negative values are rejected.
@@ -49,7 +50,21 @@ negative values are rejected.
 `k` paths in `*validation.Error`. When handling `SetupService` errors, prefix
 those paths with the configuration section. Other errors matching
 `otelx.ErrInvalidConfig` reject the section because of its resource, environment,
-or other configuration. All other errors represent runtime failures.
+or other configuration. All other errors represent runtime failures:
+
+```go
+runtime, err := otelx.SetupService(ctx, cfg.Telemetry, res)
+var failure *validation.Error
+switch {
+case errors.As(err, &failure):
+	return validation.At("telemetry", failure)
+case errors.Is(err, otelx.ErrInvalidConfig):
+	return validation.Invalid("telemetry", apperror.RuleType, "", err)
+case err != nil:
+	return fmt.Errorf("telemetry setup: %w", err)
+}
+```
+
 Enabled setup requires `service.name` and `service.version` to contain 1 to 128
 ASCII letters, digits, or `._-+`, and requires `OTEL_RESOURCE_ATTRIBUTES` to be
 unset or empty.
