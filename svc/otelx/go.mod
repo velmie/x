@@ -9,7 +9,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/velmie/x/envx v0.3.0
 	github.com/velmie/x/svc/apperror v0.1.0
-	github.com/velmie/x/svc/confload v0.4.0-rc.5
+	github.com/velmie/x/svc/confload v0.4.0-rc.6
 	github.com/velmie/x/svc/http v1.5.0
 	github.com/velmie/x/svc/validation v0.3.0
 	go.opentelemetry.io/contrib/propagators/b3 v1.46.0
