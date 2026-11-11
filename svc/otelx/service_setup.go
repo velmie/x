@@ -40,16 +40,13 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 		return nil, err
 	}
 	for _, key := range []attribute.Key{"service.name", "service.version"} {
-		if res == nil {
-			return nil, fmt.Errorf("telemetry resource attribute %s: expected 1 to 128 ASCII letters, digits or ._-+: %w", key, ErrInvalidConfig)
-		}
 		value, ok := res.Set().Value(key)
 		if !ok || value.Type() != attribute.STRING || !safeResourceValue(value.AsString()) {
 			return nil, fmt.Errorf("telemetry resource attribute %s: expected 1 to 128 ASCII letters, digits or ._-+: %w", key, ErrInvalidConfig)
 		}
 	}
-	if _, ok := os.LookupEnv(resourceAttributesEnv); ok {
-		return nil, fmt.Errorf("telemetry environment variable %s: expected unset when telemetry is enabled: %w", resourceAttributesEnv, ErrInvalidConfig)
+	if os.Getenv(resourceAttributesEnv) != "" {
+		return nil, fmt.Errorf("telemetry environment variable %s: expected unset or empty when telemetry is enabled: %w", resourceAttributesEnv, ErrInvalidConfig)
 	}
 	if cfg.BatchTimeout == 0 {
 		cfg.BatchTimeout = 100 * time.Millisecond

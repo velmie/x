@@ -35,11 +35,6 @@ func TestServiceConfigOnlyValidationAndIdentity(t *testing.T) {
 	if !errors.Is(err, otelx.ErrInvalidConfig) || errors.As(err, &validationErr) || !strings.Contains(err.Error(), "OTEL_RESOURCE_ATTRIBUTES") || !strings.Contains(err.Error(), "unset") {
 		t.Fatalf("environment failure: %v", err)
 	}
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
-	_, err = otelx.SetupService(t.Context(), cfg, resource.NewSchemaless(attribute.String("service.name", "test"), attribute.String("service.version", "1")))
-	if !errors.Is(err, otelx.ErrInvalidConfig) || !strings.Contains(err.Error(), "OTEL_RESOURCE_ATTRIBUTES") {
-		t.Fatalf("empty environment variable: %v", err)
-	}
 	if err := os.Unsetenv("OTEL_RESOURCE_ATTRIBUTES"); err != nil {
 		t.Fatal(err)
 	}

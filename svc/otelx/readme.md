@@ -52,7 +52,7 @@ those paths with the configuration section. Other errors matching
 or other configuration. All other errors represent runtime failures.
 Enabled setup requires `service.name` and `service.version` to contain 1 to 128
 ASCII letters, digits, or `._-+`, and requires `OTEL_RESOURCE_ATTRIBUTES` to be
-unset.
+unset or empty.
 
 `SetupService` owns its exporters, HTTP transport, and exclusive stdout output
 file. It does not install global providers. Collector HTTP error bodies and gRPC
