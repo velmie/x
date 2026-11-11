@@ -26,35 +26,20 @@ type ErrorPolicy struct {
 func HandleErrors(policy ErrorPolicy) broker.HandlerMiddleware {
 	return broker.HandlerMiddleware{
 		Requirements: []broker.Requirement{broker.RedeliveryRequirement{}, broker.RejectRequirement{}},
-		Wrap: func(next broker.HandlerFunc) broker.HandlerFunc {
-			return func(ctx context.Context, delivery broker.Delivery) (broker.Disposition, error) {
-				result, err := next(ctx, delivery)
-				var txPanic bool
-				if err != nil {
-					err, txPanic = transaction.NormalizePanic(err)
-				}
-				var handlerPanic *broker.PanicError
-				failure := txPanic || errors.As(err, &handlerPanic) || errors.Is(err, sqltx.ErrCommit)
-				if ctx.Err() != nil {
-					if err == nil || (!failure && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded)) {
-						return nil, ctx.Err()
-					}
-					return nil, errors.Join(err, ctx.Err())
-				}
-				if err == nil {
-					return result, nil
-				}
-				if !failure && terminal(err, policy.Retryable) {
-					return broker.Reject{
-						Cause: err,
-					}, nil
-				}
-				return broker.RetryAfter{
-					Delay: policy.RetryDelay,
-					Cause: err,
-				}, nil
-			}
-		},
+		Wrap:         wrapErrors(policy.RetryDelay, policy.Retryable, true),
+	}
+}
+
+// RetryErrors retries every processing error and declares only redelivery.
+// Delay must be nonnegative and supported by the adapter. Zero retries immediately.
+// Place broker.RecoverPanics inside this middleware. A canceled delivery context
+// suppresses settlement, preserving independent failures alongside cancellation.
+// On NATS, retry at an exhausted finite MaxDeliver stops the consumer. Unlimited
+// delivery can retry permanent failures indefinitely and JetStream has no automatic DLQ.
+func RetryErrors(delay time.Duration) broker.HandlerMiddleware {
+	return broker.HandlerMiddleware{
+		Requirements: []broker.Requirement{broker.RedeliveryRequirement{}},
+		Wrap:         wrapErrors(delay, nil, false),
 	}
 }
 
@@ -83,9 +68,14 @@ func RecoverWithAttributes[T any](callback func(context.Context, T) error, attri
 	}
 }
 
-// ProcessingLogConfig supplies application error severity and attributes using
-// the same policy as HandleErrors.
-func ProcessingLogConfig(policy ErrorPolicy) broker.ProcessingLogConfig {
+// ProcessingLogConfig returns processing diagnostics with retries and failures
+// at ERROR and rejections at INFO. Successful and canceled processing is silent.
+func ProcessingLogConfig() broker.ProcessingLogConfig {
+	return PolicyLogConfig(ErrorPolicy{})
+}
+
+// PolicyLogConfig adds WARN severity for retries accepted by policy.Retryable.
+func PolicyLogConfig(policy ErrorPolicy) broker.ProcessingLogConfig {
 	return broker.ProcessingLogConfig{
 		Level: func(result broker.Disposition, err error) slog.Level {
 			if _, ok := result.(broker.Reject); ok && err == nil {
@@ -185,5 +175,37 @@ func terminal(err error, retryable func(error) bool) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func wrapErrors(delay time.Duration, retryable func(error) bool, rejectTerminal bool) func(broker.HandlerFunc) broker.HandlerFunc {
+	return func(next broker.HandlerFunc) broker.HandlerFunc {
+		return func(ctx context.Context, delivery broker.Delivery) (broker.Disposition, error) {
+			result, err := next(ctx, delivery)
+			var txPanic bool
+			if err != nil {
+				err, txPanic = transaction.NormalizePanic(err)
+			}
+			var handlerPanic *broker.PanicError
+			failure := txPanic || errors.As(err, &handlerPanic) || errors.Is(err, sqltx.ErrCommit)
+			if ctx.Err() != nil {
+				if err == nil || (!failure && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded)) {
+					return nil, ctx.Err()
+				}
+				return nil, errors.Join(err, ctx.Err())
+			}
+			if err == nil {
+				return result, nil
+			}
+			if rejectTerminal && !failure && terminal(err, retryable) {
+				return broker.Reject{
+					Cause: err,
+				}, nil
+			}
+			return broker.RetryAfter{
+				Delay: delay,
+				Cause: err,
+			}, nil
+		}
 	}
 }

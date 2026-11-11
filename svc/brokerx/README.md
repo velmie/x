@@ -10,7 +10,7 @@ policy := brokerx.ErrorPolicy{
     Retryable: isRetryable,
 }
 handler := broker.NewTypedHandler(decode, brokerx.RecoverWithAttributes(handle, attributes)).WithMiddleware(
-    broker.LogProcessing(logger, brokerx.ProcessingLogConfig(policy)),
+    broker.LogProcessing(logger, brokerx.PolicyLogConfig(policy)),
     brokerx.HandleErrors(policy),
     broker.RecoverPanics(),
 )
@@ -31,3 +31,21 @@ Each broker field error becomes a violation with the same field and reason.
 If its cause implements `Param() string`, that value is used as the parameter.
 Other errors pass through unchanged, and converted errors retain the original
 cause. See the runnable package examples for complete minimal calls.
+
+For a consumer that must retry every processing failure, declare only the
+redelivery capability:
+
+```go
+handler := broker.NewHandler(process).WithMiddleware(
+    broker.LogProcessing(logger, brokerx.ProcessingLogConfig()),
+    brokerx.RetryErrors(time.Second),
+    broker.RecoverPanics(),
+)
+```
+
+The delay must be nonnegative and supported by the adapter. Azure Service Bus
+accepts zero; SQS accepts whole seconds from zero through 43,200. NATS stops
+its consumer if a retry is requested after a finite `MaxDeliver` is exhausted.
+Setting `MaxDeliver=-1` permits indefinite retries, including permanent errors.
+JetStream does not provide an automatic dead-letter queue. Select a retry delay
+and operational policy appropriate to the adapter.

@@ -115,7 +115,7 @@ func TestProcessingLogIncludesAllViolations(t *testing.T) {
 	handler := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
 		return nil, cause
 	}).WithMiddleware(
-		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.ProcessingLogConfig(brokerx.ErrorPolicy{})),
+		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.PolicyLogConfig(brokerx.ErrorPolicy{})),
 		brokerx.HandleErrors(brokerx.ErrorPolicy{}),
 	)
 	_, err := handler.Handle(context.Background(), broker.NewDelivery(broker.Message{}, "orders"))
@@ -151,7 +151,7 @@ func TestProcessingLogLevel(t *testing.T) {
 	policy := brokerx.ErrorPolicy{
 		Retryable: func(err error) bool { return errors.Is(err, retryable) },
 	}
-	config := brokerx.ProcessingLogConfig(policy)
+	config := brokerx.PolicyLogConfig(policy)
 	for _, tt := range []struct {
 		name   string
 		result broker.Disposition
@@ -194,7 +194,7 @@ func TestProcessingLogLevel(t *testing.T) {
 }
 
 func TestProcessingLogLevelWithoutRetryCause(t *testing.T) {
-	config := brokerx.ProcessingLogConfig(brokerx.ErrorPolicy{
+	config := brokerx.PolicyLogConfig(brokerx.ErrorPolicy{
 		Retryable: func(err error) bool { return err.Error() == "expected" },
 	})
 	if got := config.Level(broker.RetryAfter{}, nil); got != slog.LevelError {

@@ -55,13 +55,31 @@ func ExampleFieldErrors() {
 	// Output: broker.url required
 }
 
-func ExampleProcessingLogConfig() {
+func ExamplePolicyLogConfig() {
 	policy := brokerx.ErrorPolicy{
 		Retryable: func(error) bool { return true },
 	}
-	config := brokerx.ProcessingLogConfig(policy)
+	config := brokerx.PolicyLogConfig(policy)
 	fmt.Println(config.Level(broker.RetryAfter{
 		Cause: errors.New("retry"),
 	}, nil))
 	// Output: WARN
+}
+
+func ExampleRetryErrors() {
+	handler := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
+		return nil, errors.New("storage unavailable")
+	}).WithMiddleware(brokerx.RetryErrors(time.Second), broker.RecoverPanics())
+	result, _ := handler.Handle(context.Background(), broker.NewDelivery(broker.Message{}, "orders"))
+	retry := result.(broker.RetryAfter)
+	fmt.Println(retry.Delay, retry.Cause)
+	// Output: 1s storage unavailable
+}
+
+func ExampleProcessingLogConfig() {
+	config := brokerx.ProcessingLogConfig()
+	fmt.Println(config.Level(broker.RetryAfter{
+		Cause: errors.New("retry"),
+	}, nil))
+	// Output: ERROR
 }
