@@ -41,9 +41,9 @@ func walkSchema(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 		if fields[i].container {
 			continue
 		}
-		fields[i].element, err = collectionSchema(fields[i].field.Type, tagName, fields[i].sensitive)
+		fields[i].element, err = collectionSchema(fields[i].field.Type, tagName, fields[i].sensitive, make(map[reflect.Type]bool))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("configuration field %s: %w", fields[i].path, err)
 		}
 	}
 	return fields, nil
@@ -52,6 +52,7 @@ func walkSchema(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 func walkSchemaFields(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 	var fields []schemaField
 	seen := make(map[string]schemaPath)
+	active := make(map[reflect.Type]bool)
 	var walk func(reflect.Type, string, string, []int, bool) error
 	walk = func(t reflect.Type, path, goPath string, index []int, sensitive bool) error {
 		if t == nil {
@@ -63,6 +64,11 @@ func walkSchemaFields(t reflect.Type, prefix, tagName string) ([]schemaField, er
 		if t.Kind() != reflect.Struct {
 			return nil
 		}
+		if active[t] {
+			return fmt.Errorf("recursive configuration field %s has type %s", path, t)
+		}
+		active[t] = true
+		defer delete(active, t)
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			raw := strings.TrimSpace(f.Tag.Get(tagName))
@@ -194,10 +200,15 @@ type schemaNode struct {
 	element *schemaNode
 }
 
-func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, error) {
+func collectionSchema(t reflect.Type, tag string, sensitive bool, active map[reflect.Type]bool) (*schemaNode, error) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	if active[t] {
+		return nil, fmt.Errorf("recursive configuration type %s", t)
+	}
+	active[t] = true
+	defer delete(active, t)
 	node := &schemaNode{kind: t.Kind(), typ: t, tag: tag}
 	switch t.Kind() {
 	case reflect.Map:
@@ -206,7 +217,7 @@ func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, 
 		}
 		fallthrough
 	case reflect.Slice, reflect.Array:
-		child, err := collectionSchema(t.Elem(), tag, sensitive)
+		child, err := collectionSchema(t.Elem(), tag, sensitive, active)
 		if err != nil {
 			return nil, err
 		}
@@ -222,9 +233,9 @@ func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, 
 		for i := range fields {
 			fields[i].sensitive = fields[i].sensitive || sensitive
 			if !fields[i].container {
-				child, err := collectionSchema(fields[i].field.Type, tag, fields[i].sensitive)
+				child, err := collectionSchema(fields[i].field.Type, tag, fields[i].sensitive, active)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("configuration field %s: %w", fields[i].path, err)
 				}
 				fields[i].element = child
 			}
@@ -345,6 +356,7 @@ func applyNodeDefaults(
 				return nil, false, fmt.Errorf("apply element defaults at %s: %w", path, err)
 			}
 			v = reflect.ValueOf(converted)
+			changed = true
 		}
 		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || v.IsNil() {
 			return nil, false, nil

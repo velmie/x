@@ -129,7 +129,11 @@ func inspect(
 			}
 		}
 		if node != nil && field.Default != nil && !sensitive {
-			field.Default = projectCollection(node, reflect.ValueOf(field.Default))
+			normalized, err := normalizeInspectionCollection(node, reflect.ValueOf(field.Default))
+			if err != nil {
+				return nil, fmt.Errorf("inspect default for %s: %w", field.Path, err)
+			}
+			field.Default = projectCollection(node, reflect.ValueOf(normalized))
 		}
 		row := InspectionField{
 			Field: field,
@@ -362,6 +366,71 @@ func inspectionOrigin(origin ValueOrigin, files []string, env, label string) Val
 	}
 }
 
+func normalizeInspectionCollection(node *schemaNode, v reflect.Value) (any, error) {
+	v = indirectValue(v)
+	if !v.IsValid() {
+		return nil, nil
+	}
+	switch node.kind {
+	case reflect.Map:
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || node.element == nil {
+			return v.Interface(), nil
+		}
+		out := make(map[string]any, v.Len())
+		it := v.MapRange()
+		for it.Next() {
+			value, err := normalizeInspectionCollection(node.element, it.Value())
+			if err != nil {
+				return nil, err
+			}
+			out[it.Key().String()] = value
+		}
+		return out, nil
+	case reflect.Slice, reflect.Array:
+		if (v.Kind() != reflect.Slice && v.Kind() != reflect.Array) || node.element == nil {
+			return v.Interface(), nil
+		}
+		out := make([]any, v.Len())
+		for i := range out {
+			value, err := normalizeInspectionCollection(node.element, v.Index(i))
+			if err != nil {
+				return nil, err
+			}
+			out[i] = value
+		}
+		return out, nil
+	case reflect.Struct:
+		if v.Kind() == reflect.Struct && v.Type() != node.typ {
+			object, err := configurationStructMap(v, node.tag, node.fields)
+			if err != nil {
+				return nil, err
+			}
+			v = reflect.ValueOf(object)
+		}
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+			return v.Interface(), nil
+		}
+		object := normalizeObject(v)
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.element == nil {
+				continue
+			}
+			value := schemaValue(reflect.ValueOf(object), field.path)
+			if !value.IsValid() {
+				continue
+			}
+			normalized, err := normalizeInspectionCollection(field.element, value)
+			if err != nil {
+				return nil, err
+			}
+			setSchemaValue(object, field.path, normalized)
+		}
+		return object, nil
+	}
+	return v.Interface(), nil
+}
+
 func projectCollection(node *schemaNode, v reflect.Value) any {
 	for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
 		if v.IsNil() {
@@ -374,8 +443,8 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 	}
 	switch node.kind {
 	case reflect.Map:
-		if v.Kind() != reflect.Map {
-			return v.Interface()
+		if !inspectionStringMap(v) {
+			return inspectionOpaqueValue(node.typ, v)
 		}
 		if v.IsNil() {
 			return nil
@@ -385,7 +454,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 		for iter.Next() {
 			key := iter.Key().String()
 			if node.element == nil {
-				out[key] = iter.Value().Interface()
+				out[key] = inspectionOpaqueValue(node.typ.Elem(), iter.Value())
 			} else {
 				out[key] = projectCollection(node.element, iter.Value())
 			}
@@ -393,7 +462,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 		return out
 	case reflect.Slice, reflect.Array:
 		if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
-			return v.Interface()
+			return inspectionOpaqueValue(node.typ, v)
 		}
 		if v.Kind() == reflect.Slice && v.IsNil() {
 			return nil
@@ -401,7 +470,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 		out := make([]any, v.Len())
 		for i := range out {
 			if node.element == nil {
-				out[i] = v.Index(i).Interface()
+				out[i] = inspectionOpaqueValue(node.typ.Elem(), v.Index(i))
 			} else {
 				out[i] = projectCollection(node.element, v.Index(i))
 			}
@@ -436,7 +505,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 				continue
 			}
 			var value any
-			if field.sensitive {
+			if field.sensitive || (field.element == nil && collectionContainsSensitive(field.field.Type)) {
 				value = inspectionRedacted
 			} else {
 				fv := schemaFieldValue(v, field)
@@ -453,6 +522,17 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 		return out
 	}
 	return v.Interface()
+}
+
+func inspectionStringMap(value reflect.Value) bool {
+	return value.Kind() == reflect.Map && value.Type().Key().Kind() == reflect.String
+}
+
+func inspectionOpaqueValue(t reflect.Type, value reflect.Value) any {
+	if collectionContainsSensitive(t) {
+		return inspectionRedacted
+	}
+	return value.Interface()
 }
 
 func setProjected(out map[string]any, path string, value any) {
@@ -529,12 +609,13 @@ func appendElementRows(
 		}
 		localPath := field.Path
 		field.Path = path + "." + localPath
-		if item.sensitive {
+		sensitive := item.sensitive || (item.element == nil && collectionContainsSensitive(item.field.Type))
+		if sensitive {
 			field.Default = inspectionRedacted
 		}
 		row := InspectionField{Field: field, Env: env(field.Path)}
 		if values {
-			if item.sensitive {
+			if sensitive {
 				row.Value = inspectionRedacted
 			} else {
 				fv := schemaFieldValue(v, &item)

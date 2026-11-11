@@ -32,10 +32,9 @@ are shown as null.
 
 Mark sensitive fields or their containing structs with `sensitive:"true"`.
 Inspection masks both defaults and values as `[REDACTED]` before formatting or
-marshaling. A map, slice, or array is masked in its entirety when its element
-type contains a sensitive field at any depth, even when that field is nested
-through pointers or collections. This also hides non-sensitive members of the
-collection. `DescribeStruct` itself retains the declared metadata, including
+marshaling. Structured collections are projected by configuration tag, with
+sensitive members masked. A sensitive collection that cannot be projected is
+masked as a whole. `DescribeStruct` itself retains the declared metadata, including
 raw defaults. Treat it accordingly. File origins are displayed as `file[n]`,
 reader and flag identifiers are reduced to source labels, and environment
 origins use the declared environment name. Paths and reader names are omitted.
@@ -541,5 +540,6 @@ elements. Aggregate values and defaults use configuration tag names, omit
 untagged fields, and redact sensitive members before rendering. A sensitive
 collection is masked as a whole. Concrete element rows identify the applicable
 source when known. Aggregate rows with mixed sources report an unknown source.
+Recursive configuration schemas are rejected with a field and type error.
 These behaviors provide more detailed inspection and stricter validation than
 older versions, which treated collection elements as opaque.
