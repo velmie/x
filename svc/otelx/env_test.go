@@ -1,7 +1,6 @@
 package otelx_test
 
 import (
-	"os"
 	"reflect"
 	"testing"
 
@@ -179,14 +178,10 @@ func TestConfigFromEnv(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for key, value := range tt.envVars {
-				os.Setenv(key, value)
+				t.Setenv(key, value)
 			}
 
 			got, err := otelx.ConfigFromEnv()
-
-			for key := range tt.envVars {
-				os.Unsetenv(key)
-			}
 
 			if (err != nil) != tt.want.err {
 				t.Errorf("ConfigFromEnv() error = %+v, wantErr = %v", err, tt.want.err)

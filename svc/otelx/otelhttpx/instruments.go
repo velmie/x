@@ -71,13 +71,13 @@ func validateInstrumentation(
 ) error {
 	switch {
 	case strings.TrimSpace(operation) == "":
-		return fmt.Errorf("Operation is required: %w", otelx.ErrInvalidConfig)
+		return fmt.Errorf("Operation is required: %w", otelx.ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	case tracer == nil:
-		return fmt.Errorf("Tracer is required: %w", otelx.ErrInvalidConfig)
+		return fmt.Errorf("Tracer is required: %w", otelx.ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	case meter == nil:
-		return fmt.Errorf("Meter is required: %w", otelx.ErrInvalidConfig)
+		return fmt.Errorf("Meter is required: %w", otelx.ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	case propagator == nil:
-		return fmt.Errorf("Propagator is required: %w", otelx.ErrInvalidConfig)
+		return fmt.Errorf("Propagator is required: %w", otelx.ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	default:
 		return nil
 	}

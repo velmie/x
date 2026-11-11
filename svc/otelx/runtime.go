@@ -1,6 +1,6 @@
-// Package otelx assembles explicitly configured OpenTelemetry providers and
-// owns their lifecycle. It provides bounded propagation without installing
-// global providers, discovering service identity, or opening application files.
+// Package otelx assembles OpenTelemetry providers and owns their lifecycle.
+// SetupService provides a standard service profile without installing globals.
+// Open supports native exporter and resource customization.
 package otelx
 
 import (
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -82,6 +83,8 @@ type Runtime struct {
 	flushTimeout time.Duration
 	shutdownOnce sync.Once
 	shutdownErr  error
+	output       *os.File
+	transport    *http.Transport
 }
 
 // Open constructs the selected pipelines and cleans up partial initialization.
@@ -109,7 +112,7 @@ func Open(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		return r, nil
 	}
 	if cfg.Resource == nil {
-		return nil, fmt.Errorf("Resource is required: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("Resource is required: %w", ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	if cfg.NewSpanExporter == nil && cfg.NewMetricExporter == nil && cfg.PrometheusRegistry == nil {
 		return nil, fmt.Errorf("at least one exporter or PrometheusRegistry is required: %w", ErrInvalidConfig)
@@ -247,6 +250,14 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 						errs = append(errs, fmt.Errorf("shutdown metric exporter: %w", exporterShutdownErr))
 					}
 				}
+			}
+			if r.output != nil {
+				if err := r.output.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("close telemetry output: %w", err))
+				}
+			}
+			if r.transport != nil {
+				r.transport.CloseIdleConnections()
 			}
 			r.shutdownErr = errors.Join(errs...)
 		},

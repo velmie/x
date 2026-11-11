@@ -76,7 +76,7 @@ func TestBoundedTransportEndsAtHeadersAndPreservesCaller(t *testing.T) {
 	if err != nil || response.Body != body {
 		t.Fatalf("body or error changed: %v", err)
 	}
-	if request.Header["traceparent"][0] != "stale" || request.Header.Get("Tracestate") != "vendor=private" {
+	if request.Header[strings.ToLower("Traceparent")][0] != "stale" || request.Header.Get("Tracestate") != "vendor=private" {
 		t.Fatal("caller headers were mutated")
 	}
 	ended := spans.Ended()
@@ -89,7 +89,7 @@ func TestBoundedTransportEndsAtHeadersAndPreservesCaller(t *testing.T) {
 		t.Fatalf("wrong status: %v", attrs)
 	}
 	for _, attr := range ended[0].Attributes() {
-		if strings.Contains(attr.Value.Emit(), "secret") || strings.Contains(attr.Value.Emit(), "private") {
+		if strings.Contains(attr.Value.String(), "secret") || strings.Contains(attr.Value.String(), "private") {
 			t.Fatalf("sensitive span attribute: %v", attr)
 		}
 	}
@@ -423,7 +423,9 @@ func TestBoundedServerRealHTTPAbort(t *testing.T) {
 	defer server.Close()
 	response, err := server.Client().Get(server.URL)
 	if err == nil {
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		t.Fatal("client did not observe aborted response")
 	}
 	<-done

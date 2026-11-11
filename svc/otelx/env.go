@@ -10,6 +10,8 @@ var env = envx.CreatePrototype().WithPrefix("TRACING_")
 // It sets up the various tracing configuration sections like Communication,
 // Security, Resource, Sampling, and Propagation by reading their respective
 // environment variables.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func ConfigFromEnv() (*Config, error) {
 	c := &Config{}
 

@@ -13,7 +13,9 @@ const (
 )
 
 // DefaultConfig contains legacy tracing defaults, including plaintext transport
-// and baggage propagation. New services should configure Open explicitly.
+// and baggage propagation.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 var DefaultConfig = Config{
 	Communication: CommunicationConfig{
 		ExportMethod: ExportMethodGRPC,
@@ -34,6 +36,8 @@ var DefaultConfig = Config{
 }
 
 // CommunicationConfig holds settings related to the communication method and protocol for tracing data.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type CommunicationConfig struct {
 	// Endpoint specifies the URL where the tracer will send the tracing data.
 	Endpoint string `json:"endpoint" mapstructure:"endpoint"`
@@ -42,6 +46,8 @@ type CommunicationConfig struct {
 }
 
 // SecurityConfig groups settings related to security and authentication for the tracer.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type SecurityConfig struct {
 	// AuthorizationHeader is the header used for authenticating requests made by the tracer.
 	AuthorizationHeader string `json:"authorizationHeader" mapstructure:"authorizationHeader"`
@@ -51,6 +57,8 @@ type SecurityConfig struct {
 }
 
 // ResourceConfig contains settings related to the service resource information used by the tracer.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type ResourceConfig struct {
 	// ServiceName is the name of the service attached to all spans created by the tracer.
 	ServiceName string `json:"serviceName" mapstructure:"serviceName"`
@@ -66,6 +74,8 @@ type ResourceConfig struct {
 }
 
 // SamplingConfig deals with settings related to trace sampling.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type SamplingConfig struct {
 	// Ratio determines the fraction of traces that will be collected.
 	// A ratio of 1 means all traces are collected, while 0 means none.
@@ -73,6 +83,8 @@ type SamplingConfig struct {
 }
 
 // PropagationConfig contains settings related to trace context propagation.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type PropagationConfig struct {
 	// Baggage, when true, enables the propagation of OpenTelemetry baggage items.
 	Baggage bool `json:"baggage" mapstructure:"baggage"`
@@ -86,6 +98,8 @@ type PropagationConfig struct {
 }
 
 // Config aggregates all the configuration sub-structures.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type Config struct {
 	Disabled      bool                `json:"disabled" mapstructure:"disabled"`
 	Communication CommunicationConfig `json:"communication" mapstructure:"communication"`

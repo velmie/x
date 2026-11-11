@@ -26,6 +26,7 @@ func RegisterDetector(name string, detector resource.Detector) {
 	detectorsReg[name] = detector
 }
 
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func CreateTracerProvider(
 	ctx context.Context,
 	ex sdktrace.SpanExporter,
@@ -78,6 +79,7 @@ func CreateTracerProvider(
 	return sdktrace.NewTracerProvider(otelTpOpts...), nil
 }
 
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func CreatePropagator(c *PropagationConfig) propagation.TextMapPropagator {
 	var propagators []propagation.TextMapPropagator
 	if c.TraceContext {
@@ -100,6 +102,7 @@ func CreatePropagator(c *PropagationConfig) propagation.TextMapPropagator {
 	return propagation.NewCompositeTextMapPropagator(propagators...)
 }
 
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func CreateExporter(ctx context.Context, c *Config) (e sdktrace.SpanExporter, err error) {
 	switch c.Communication.ExportMethod {
 	case ExportMethodHTTP:
@@ -169,6 +172,8 @@ type tracerProviderOptions struct {
 type tracerProviderOption func(*tracerProviderOptions)
 
 // TPWithTracerProviderOptions adds a tracerProviderOption
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func TPWithTracerProviderOptions(opt ...sdktrace.TracerProviderOption) tracerProviderOption {
 	return func(opts *tracerProviderOptions) {
 		opts.tpOpts = append(opts.tpOpts, opt...)
@@ -176,6 +181,8 @@ func TPWithTracerProviderOptions(opt ...sdktrace.TracerProviderOption) tracerPro
 }
 
 // TPWithResourceDetectors adds a resource.Detector
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func TPWithResourceDetectors(detector ...resource.Detector) tracerProviderOption {
 	return func(opts *tracerProviderOptions) {
 		opts.resourceDetectors = append(opts.resourceDetectors, detector...)
@@ -183,6 +190,8 @@ func TPWithResourceDetectors(detector ...resource.Detector) tracerProviderOption
 }
 
 // TPWithResourceAttributes adds an attribute.KeyValue
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func TPWithResourceAttributes(kv ...attribute.KeyValue) tracerProviderOption {
 	return func(opts *tracerProviderOptions) {
 		opts.resourceAttributes = append(opts.resourceAttributes, kv...)

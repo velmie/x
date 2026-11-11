@@ -40,7 +40,7 @@ func NewHandler(next http.Handler, cfg HandlerConfig) (http.Handler, error) {
 		return nil, fmt.Errorf("next handler is required: %w", otelx.ErrInvalidConfig)
 	}
 	if strings.TrimSpace(cfg.Route) == "" {
-		return nil, fmt.Errorf("Route is required: %w", otelx.ErrInvalidConfig)
+		return nil, fmt.Errorf("Route is required: %w", otelx.ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	if err := validateInstrumentation(cfg.Operation, cfg.Tracer, cfg.Meter, cfg.Propagator); err != nil {
 		return nil, err

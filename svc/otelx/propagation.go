@@ -79,7 +79,7 @@ func NewPropagation(policy PropagationPolicy) (*Propagation, error) {
 		p.format = FormatB3Multi
 		p.wire = b3.New(b3.WithInjectEncoding(b3.B3MultipleHeader))
 	default:
-		return nil, fmt.Errorf("Format must be w3c, b3-single or b3-multi: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("Format must be w3c, b3-single or b3-multi: %w", ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	if policy.MaxTraceHeaderBytes < 0 || policy.MaxBaggageHeaderBytes < 0 || policy.MaxBaggageMembers < 0 {
 		return nil, fmt.Errorf("propagation limits must be nonnegative: %w", ErrInvalidConfig)
@@ -94,7 +94,7 @@ func NewPropagation(policy PropagationPolicy) (*Propagation, error) {
 		p.maxMembers = policy.MaxBaggageMembers
 	}
 	if len(policy.Baggage) > p.maxMembers {
-		return nil, fmt.Errorf("Baggage exceeds MaxBaggageMembers: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("Baggage exceeds MaxBaggageMembers: %w", ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	longest := make([]baggage.Member, 0, len(policy.Baggage))
 	maxBytes := 0
@@ -112,7 +112,7 @@ func NewPropagation(policy PropagationPolicy) (*Propagation, error) {
 			member, err := baggage.NewMemberRaw(rule.Key, value)
 			encoded := member.String()
 			if err != nil || value == "" || encoded == "" {
-				return nil, fmt.Errorf("Baggage[%d] requires a valid wire key and nonempty values: %w", i, ErrInvalidConfig)
+				return nil, fmt.Errorf("Baggage[%d] requires a valid wire key and nonempty values: %w", i, ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 			}
 			allowed[value] = struct{}{}
 			if len(encoded) > maxMemberBytes {
@@ -128,10 +128,10 @@ func NewPropagation(policy PropagationPolicy) (*Propagation, error) {
 		maxBytes += len(longest) - 1
 	}
 	if maxBytes > p.maxBaggageBytes {
-		return nil, fmt.Errorf("Baggage can exceed MaxBaggageHeaderBytes: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("Baggage can exceed MaxBaggageHeaderBytes: %w", ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	if _, err := baggage.New(longest...); err != nil {
-		return nil, fmt.Errorf("Baggage exceeds native SDK limits: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("Baggage exceeds native SDK limits: %w", ErrInvalidConfig) //nolint:staticcheck // Preserve the existing diagnostic.
 	}
 	return p, nil
 }

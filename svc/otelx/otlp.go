@@ -17,8 +17,7 @@ import (
 // globals, and returns the initialized components. The legacy ConfigFromEnv
 // defaults and exporter options remain unchanged.
 //
-// Deprecated: Use Open with an explicit resource and exporter factories. Open
-// returns a runtime that owns shutdown and does not install global providers.
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, error) {
 	opts := &otlpOptions{}
 	for _, o := range op {
@@ -65,6 +64,8 @@ func Setup(ctx context.Context, c *Config, op ...otlpOption) (*SetupResult, erro
 }
 
 // SetupResult contains the components resulting from setting up OpenTelemetry.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 type SetupResult struct {
 	// TracerProvider is the legacy provider installed by Setup.
 	TracerProvider trace.TracerProvider
@@ -81,6 +82,8 @@ type SetupResult struct {
 //
 // Returns:
 // - An otlpOption to use with SetupOTLP function.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func WithExporter(exporter sdktrace.SpanExporter) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.exporter = exporter
@@ -94,6 +97,8 @@ func WithExporter(exporter sdktrace.SpanExporter) otlpOption {
 //
 // Returns:
 // - An otlpOption to use with SetupOTLP function.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func WithPropagator(propagator propagation.TextMapPropagator) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.propagator = propagator
@@ -107,6 +112,8 @@ func WithPropagator(propagator propagation.TextMapPropagator) otlpOption {
 //
 // Returns:
 // - An otlpOption to use with SetupOTLP function.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func WithResourceAttributes(attrs ...attribute.KeyValue) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.resourceAttributes = append(opts.resourceAttributes, attrs...)
@@ -114,6 +121,8 @@ func WithResourceAttributes(attrs ...attribute.KeyValue) otlpOption {
 }
 
 // WithTracerProviderOptions adds native options to the legacy tracer provider.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func WithTracerProviderOptions(toOpts ...sdktrace.TracerProviderOption) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.tpOpts = append(opts.tpOpts, toOpts...)
@@ -121,6 +130,8 @@ func WithTracerProviderOptions(toOpts ...sdktrace.TracerProviderOption) otlpOpti
 }
 
 // WithResourceDetectors adds native resource detectors to legacy Setup.
+//
+// Deprecated: Load ServiceConfig with confload and initialize it with SetupService.
 func WithResourceDetectors(detector ...resource.Detector) otlpOption {
 	return func(opts *otlpOptions) {
 		opts.resourceDetectors = append(opts.resourceDetectors, detector...)

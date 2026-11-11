@@ -4,7 +4,37 @@
 SDK workers it creates, and its `Shutdown` joins their work. The module also provides bounded propagation, a bounded
 HTTP instrumentation profile, and `slog` correlation.
 
-## Open and stop a runtime
+## Service telemetry
+
+Load `ServiceConfig` with confload, applying its tagged defaults and
+`ServiceEnvAliases` with `confload.WithEnvAliases`. Use
+`confload.JSONStringMapHook` for the headers map. The canonical environment
+names start with `OTELX_`. Supply an explicit resource with `service.name` and
+`service.version`, then stop producers and scraping before shutdown:
+
+```go
+res := resource.NewSchemaless(
+    attribute.String("service.name", "orders"),
+    attribute.String("service.version", "1.0.0"),
+)
+runtime, err := otelx.SetupService(ctx, cfg, res)
+if err != nil {
+    return err
+}
+runErr := runService(ctx, runtime)
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+return errors.Join(runErr, runtime.Shutdown(shutdownCtx))
+```
+
+`SetupService` owns its exporters, HTTP transport, and exclusive stdout output
+file. It does not install global providers. The zero configuration disables
+telemetry. When enabled, collector endpoints use `host:port`, TLS is verified,
+and plaintext is allowed only for literal loopback addresses. `stdout` export
+requires a new output file. Prometheus uses a dedicated registry exposed via
+`Runtime.PrometheusHandler`.
+
+## Native customization with Open
 
 Build `runtimeConfig` from service configuration, then open and stop the runtime:
 
