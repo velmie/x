@@ -1,4 +1,4 @@
-// Package transaction maps transaction failures at service boundaries.
+// Package transaction classifies sqltx outcomes at service boundaries.
 package transaction
 
 import (

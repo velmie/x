@@ -9,6 +9,8 @@ import (
 
 // OnlyCancellation reports whether all independent causes match an allowed
 // cancellation. A classified rejection or uncertain commit remains a failure.
+// Allowed values must be leaf sentinels such as context.Canceled or ctx.Err();
+// a wrapped error does not match itself because its causes are inspected.
 func OnlyCancellation(err error, allowed ...error) bool {
 	var panicErr *sqltx.PanicError
 	if errors.As(err, &panicErr) {

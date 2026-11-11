@@ -6,3 +6,5 @@ require (
 	github.com/velmie/x/sqltx v1.3.0
 	github.com/velmie/x/svc/apperror v0.1.0
 )
+
+require github.com/DATA-DOG/go-sqlmock v1.5.2
