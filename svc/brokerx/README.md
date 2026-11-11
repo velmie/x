@@ -79,3 +79,8 @@ if err != nil {
 The binding validates handler requirements before returning. Its run function
 calls the native consumer's `RunService` and preserves its error. The creator
 retains ownership of the consumer and its dependencies.
+
+The isolated [`examples`](examples/) module checks the SQS and Azure Service
+Bus adapters' local capability validation. These checks do not contact cloud
+services and do not establish dead-letter behavior. Capability validation does
+not check the retry delay, which must satisfy the selected adapter's limits.
