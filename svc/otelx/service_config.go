@@ -4,15 +4,13 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/velmie/x/svc/apperror"
 	"github.com/velmie/x/svc/validation"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 // ServiceConfig selects the standard service telemetry profile.
@@ -31,6 +29,9 @@ type ServiceConfig struct {
 	StdoutFile      string            `k:"stdout_file" hint:"New exclusive file for stdout trace export"`
 	LocalPlaintext  bool              `k:"local_plaintext" default:"false" hint:"Permit plaintext to literal loopback addresses"`
 	MetricsMode     string            `k:"metrics_mode" default:"otlp" hint:"Metric collection mode" validate:"omitempty,oneof=otlp prometheus"`
+	BatchTimeout    time.Duration     `k:"batch_timeout" default:"100ms" hint:"Span batch delay" validate:"gte=0"`
+	MetricInterval  time.Duration     `k:"metric_interval" default:"1s" hint:"Periodic metric export interval" validate:"gte=0"`
+	ExportTimeout   time.Duration     `k:"export_timeout" default:"1s" hint:"Timeout for each telemetry export" validate:"gte=0"`
 	RuntimeMetrics  bool              `k:"runtime_metrics" default:"false" hint:"Go and process collectors in Prometheus mode"`
 }
 
@@ -40,10 +41,10 @@ const (
 	configRuleValue       = "value"
 )
 
-// ValidateServiceConfig checks selected settings and explicit resource identity.
+// ValidateServiceConfig checks the fields of ServiceConfig only.
 // It opens no files, connections, listeners, exporters, or workers.
 // Configuration violations use relative k paths.
-func ValidateServiceConfig(cfg ServiceConfig, res *resource.Resource) error {
+func ValidateServiceConfig(cfg ServiceConfig) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -53,15 +54,6 @@ func ValidateServiceConfig(cfg ServiceConfig, res *resource.Resource) error {
 			failure.Cause = errors.Join(failure.Cause, ErrInvalidConfig)
 		}
 		return err
-	}
-	if res == nil {
-		return configFailure("service.name", configRuleValue, "explicit resource with service.name and service.version", nil)
-	}
-	for _, key := range []attribute.Key{"service.name", "service.version"} {
-		v, ok := res.Set().Value(key)
-		if !ok || v.Type() != attribute.STRING || !safeResourceValue(v.AsString()) {
-			return configFailure(string(key), configRuleFormat, "1 to 128 ASCII letters, digits or ._-+", nil)
-		}
 	}
 	if cfg.TraceProtocol == "" {
 		cfg.TraceProtocol = "http"
@@ -74,9 +66,6 @@ func ValidateServiceConfig(cfg ServiceConfig, res *resource.Resource) error {
 	}
 	if !safeResourceValue(cfg.Environment) {
 		return configFailure("environment", configRuleFormat, "1 to 128 ASCII letters, digits or ._-+", nil)
-	}
-	if os.Getenv(resourceAttributesEnv) != "" {
-		return configFailure(resourceAttributesEnv, configRuleValue, "unset when telemetry is enabled", nil)
 	}
 	if cfg.TraceProtocol == "stdout" && (cfg.StdoutFile == "" || len(cfg.StdoutFile) > 4096 || strings.ContainsAny(cfg.StdoutFile, "\x00\r\n")) {
 		return configFailure("stdout_file", configRuleFormat, "nonempty file path of at most 4096 bytes", nil)

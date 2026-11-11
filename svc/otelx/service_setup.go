@@ -36,8 +36,29 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 	if !cfg.Enabled {
 		return Open(ctx, RuntimeConfig{})
 	}
-	if err := ValidateServiceConfig(cfg, res); err != nil {
+	if err := ValidateServiceConfig(cfg); err != nil {
 		return nil, err
+	}
+	for _, key := range []attribute.Key{"service.name", "service.version"} {
+		if res == nil {
+			return nil, fmt.Errorf("telemetry resource attribute %s: expected 1 to 128 ASCII letters, digits or ._-+: %w", key, ErrInvalidConfig)
+		}
+		value, ok := res.Set().Value(key)
+		if !ok || value.Type() != attribute.STRING || !safeResourceValue(value.AsString()) {
+			return nil, fmt.Errorf("telemetry resource attribute %s: expected 1 to 128 ASCII letters, digits or ._-+: %w", key, ErrInvalidConfig)
+		}
+	}
+	if _, ok := os.LookupEnv(resourceAttributesEnv); ok {
+		return nil, fmt.Errorf("telemetry environment variable %s: expected unset when telemetry is enabled: %w", resourceAttributesEnv, ErrInvalidConfig)
+	}
+	if cfg.BatchTimeout == 0 {
+		cfg.BatchTimeout = 100 * time.Millisecond
+	}
+	if cfg.MetricInterval == 0 {
+		cfg.MetricInterval = time.Second
+	}
+	if cfg.ExportTimeout == 0 {
+		cfg.ExportTimeout = time.Second
 	}
 	var output *os.File
 	if cfg.TraceProtocol == "stdout" {
@@ -88,7 +109,7 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 			Transport: collectorTransport{
 				base: transport,
 			},
-			Timeout: time.Second,
+			Timeout: cfg.ExportTimeout,
 		}
 	}
 	scheme := "https"
@@ -110,12 +131,12 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 		Propagator: policy,
 		Sampler:    sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRatio)),
 		BatchOptions: []sdktrace.BatchSpanProcessorOption{
-			sdktrace.WithBatchTimeout(100 * time.Millisecond),
-			sdktrace.WithExportTimeout(time.Second),
+			sdktrace.WithBatchTimeout(cfg.BatchTimeout),
+			sdktrace.WithExportTimeout(cfg.ExportTimeout),
 		},
 		ReaderOptions: []sdkmetric.PeriodicReaderOption{
-			sdkmetric.WithInterval(time.Second),
-			sdkmetric.WithTimeout(time.Second),
+			sdkmetric.WithInterval(cfg.MetricInterval),
+			sdkmetric.WithTimeout(cfg.ExportTimeout),
 		},
 	}
 	options.NewSpanExporter = func(ctx context.Context) (sdktrace.SpanExporter, error) {
@@ -143,7 +164,7 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 				otlptracegrpc.WithEndpointURL(scheme + "://" + cfg.Endpoint),
 				otlptracegrpc.WithHeaders(headers),
 				otlptracegrpc.WithCompressor(""),
-				otlptracegrpc.WithTimeout(time.Second),
+				otlptracegrpc.WithTimeout(cfg.ExportTimeout),
 				otlptracegrpc.WithRetry(otlptracegrpc.RetryConfig{
 					Enabled: false,
 				}),

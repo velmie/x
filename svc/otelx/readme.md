@@ -7,17 +7,29 @@ HTTP instrumentation profile, and `slog` correlation.
 ## Service telemetry
 
 Load `ServiceConfig` with confload, applying its tagged defaults and
-`ServiceEnvAliases` with `confload.WithEnvAliases`. Use
+`ServiceEnvPrefix` with `confload.WithSectionEnvPrefix`. Use
 `confload.JSONStringMapHook` for the headers map. The canonical environment
 names start with `OTELX_`. Supply an explicit resource with `service.name` and
 `service.version`, then stop producers and scraping before shutdown:
 
 ```go
+type Config struct {
+    Telemetry otelx.ServiceConfig `k:"telemetry"`
+}
+
+loader := confload.New(
+    confload.WithSectionEnvPrefix("telemetry", otelx.ServiceEnvPrefix),
+    confload.WithDecodeHooks(confload.JSONStringMapHook()),
+)
+cfg, err := confload.LoadInto[Config](loader)
+if err != nil {
+    return err
+}
 res := resource.NewSchemaless(
     attribute.String("service.name", "orders"),
     attribute.String("service.version", "1.0.0"),
 )
-runtime, err := otelx.SetupService(ctx, cfg, res)
+runtime, err := otelx.SetupService(ctx, cfg.Telemetry, res)
 if err != nil {
     return err
 }
@@ -26,6 +38,21 @@ shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 return errors.Join(runErr, runtime.Shutdown(shutdownCtx))
 ```
+
+The `batch_timeout` (default `100ms`) controls span batch delay.
+`metric_interval` (default `1s`) controls periodic metrics collection, and
+`export_timeout` (default `1s`) bounds each span and metric export, the
+collector HTTP client, and the gRPC exporter. Zero uses the default and
+negative values are rejected.
+
+`ValidateServiceConfig` reports only configuration fields, using relative
+`k` paths in `*validation.Error`. When handling `SetupService` errors, prefix
+those paths with the configuration section. Other errors matching
+`otelx.ErrInvalidConfig` reject the section because of its resource, environment,
+or other configuration. All other errors represent runtime failures.
+Enabled setup requires `service.name` and `service.version` to contain 1 to 128
+ASCII letters, digits, or `._-+`, and requires `OTEL_RESOURCE_ATTRIBUTES` to be
+unset.
 
 `SetupService` owns its exporters, HTTP transport, and exclusive stdout output
 file. It does not install global providers. Collector HTTP error bodies and gRPC

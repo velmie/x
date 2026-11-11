@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/velmie/x/svc/confload"
 	"github.com/velmie/x/svc/otelx"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
@@ -74,14 +75,14 @@ func ExampleTrafficClassAttributes() {
 	// Output: traffic.class batch
 }
 
-func ExampleServiceEnvAliases() {
-	aliases := otelx.ServiceEnvAliases("telemetry")
-	fmt.Println(aliases["telemetry.trace_protocol"])
-	// Output: OTELX_TRACE_PROTOCOL
+func ExampleServiceEnvPrefix() {
+	loader := confload.New(confload.WithSectionEnvPrefix("telemetry", otelx.ServiceEnvPrefix))
+	fmt.Println(loader.EnvName("telemetry.headers.authorization"))
+	// Output: OTELX_HEADERS_AUTHORIZATION
 }
 
 func ExampleValidateServiceConfig() {
 	cfg := otelx.ServiceConfig{}
-	fmt.Println(otelx.ValidateServiceConfig(cfg, nil))
+	fmt.Println(otelx.ValidateServiceConfig(cfg))
 	// Output: <nil>
 }

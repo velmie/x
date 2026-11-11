@@ -66,7 +66,6 @@ func TestSetupServiceOwnsOutputAndExportsSelectedSignals(t *testing.T) {
 }
 
 func TestServiceConfigValidationAndDisabledSetup(t *testing.T) {
-	res := resource.NewSchemaless(attribute.String("service.name", "test"), attribute.String("service.version", "1"))
 	cfg := otelx.ServiceConfig{
 		Enabled:        true,
 		TraceProtocol:  "grpc",
@@ -74,7 +73,7 @@ func TestServiceConfigValidationAndDisabledSetup(t *testing.T) {
 		LocalPlaintext: true,
 		Environment:    "test",
 	}
-	err := otelx.ValidateServiceConfig(cfg, res)
+	err := otelx.ValidateServiceConfig(cfg)
 	if err == nil || !errors.Is(err, otelx.ErrInvalidConfig) || !strings.Contains(err.Error(), "metrics_endpoint") {
 		t.Fatalf("unexpected validation: %v", err)
 	}
@@ -146,14 +145,7 @@ func TestServiceSamplingAndIndependentRegistries(t *testing.T) {
 	}
 }
 
-func TestServiceEnvAliasesAndDescription(t *testing.T) {
-	aliases := otelx.ServiceEnvAliases("telemetry")
-	if aliases["telemetry.trace_protocol"] != "OTELX_TRACE_PROTOCOL" || aliases["telemetry.headers"] != "OTELX_HEADERS" {
-		t.Fatalf("aliases: %v", aliases)
-	}
-	if otelx.ServiceEnvAliases("")["enabled"] != "OTELX_ENABLED" {
-		t.Fatal("root aliases invalid")
-	}
+func TestServiceDescription(t *testing.T) {
 	fields, err := confload.DescribeStruct[otelx.ServiceConfig]()
 	if err != nil {
 		t.Fatal(err)
@@ -176,10 +168,10 @@ func TestServiceConfigConfloadInspectionAndValues(t *testing.T) {
 	}
 	t.Setenv("OTELX_ENABLED", "true")
 	t.Setenv("OTELX_SAMPLE_RATIO", "0")
-	t.Setenv("OTELX_HEADERS", `{"authorization":"private-value"}`)
+	t.Setenv("OTELX_HEADERS_AUTHORIZATION", "private-value")
 	loader := confload.New(
-		confload.WithEnvAliases(otelx.ServiceEnvAliases("telemetry")),
-		confload.WithDecodeHooks(confload.JSONStringMapHook()),
+		confload.WithSectionEnvPrefix("telemetry", otelx.ServiceEnvPrefix),
+		confload.WithReader("config.json", strings.NewReader(`{"telemetry":{"headers":{"authorization":"file"}}}`)),
 	)
 	var cfg config
 	if err := loader.Unmarshal(&cfg); err != nil {
@@ -211,7 +203,7 @@ func TestServiceConfigConfloadInspectionAndValues(t *testing.T) {
 	t.Setenv("OTELX_ENABLED", "not-a-bool")
 	sourceFree := confload.New(
 		confload.WithFiles(filepath.Join(t.TempDir(), "missing.yaml")),
-		confload.WithEnvAliases(otelx.ServiceEnvAliases("telemetry")),
+		confload.WithSectionEnvPrefix("telemetry", otelx.ServiceEnvPrefix),
 	)
 	if _, err := sourceFree.Inspect(fields, nil, confload.Snapshot{}, confload.InspectOptions{}); err != nil {
 		t.Fatalf("schema inspection read configuration sources: %v", err)
