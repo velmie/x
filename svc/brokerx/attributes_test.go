@@ -26,7 +26,7 @@ func TestRecoverWithAttributesRetainsPanicAndDiagnosticFields(t *testing.T) {
 			return cause
 		}, func(id string) []slog.Attr { return []slog.Attr{slog.String("order_id", id)} })
 		h := broker.NewTypedHandler(func([]byte) (string, error) { return "order-7", nil }, callback).WithMiddleware(
-			broker.LogProcessing(slog.New(slog.NewJSONHandler(&logs, nil)), brokerx.ProcessingLogConfig()),
+			broker.LogProcessing(slog.New(slog.NewJSONHandler(&logs, nil)), brokerx.ProcessingLogConfig(brokerx.ErrorPolicy{})),
 			brokerx.HandleErrors(brokerx.ErrorPolicy{RetryDelay: time.Second}),
 			broker.RecoverPanics(),
 		)
@@ -69,7 +69,7 @@ func TestProcessingLogReportsTransactionPhase(t *testing.T) {
 	h := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
 		return nil, cause
 	}).WithMiddleware(
-		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.ProcessingLogConfig()),
+		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.ProcessingLogConfig(brokerx.ErrorPolicy{})),
 		brokerx.HandleErrors(brokerx.ErrorPolicy{}),
 	)
 	_, err := h.Handle(context.Background(), broker.NewDelivery(broker.Message{}, "orders"))
@@ -87,7 +87,7 @@ func TestProcessingLogKeepsCooperativeCancellationQuiet(t *testing.T) {
 	h := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
 		return nil, ctx.Err()
 	}).WithMiddleware(
-		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.ProcessingLogConfig()),
+		broker.LogProcessing(slog.New(slog.NewJSONHandler(&output, nil)), brokerx.ProcessingLogConfig(brokerx.ErrorPolicy{})),
 		brokerx.HandleErrors(brokerx.ErrorPolicy{}),
 	)
 	_, err := h.Handle(ctx, broker.NewDelivery(broker.Message{}, "orders"))

@@ -1,0 +1,67 @@
+package brokerx_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/velmie/broker"
+	"github.com/velmie/x/svc/apperror"
+	"github.com/velmie/x/svc/brokerx"
+	"github.com/velmie/x/svc/validation"
+)
+
+func ExampleHandleErrors() {
+	policy := brokerx.ErrorPolicy{
+		RetryDelay: time.Second,
+	}
+	handler := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
+		return nil, &apperror.Error{
+			Category: apperror.Conflict,
+			Code:     "CONFLICT",
+		}
+	}).WithMiddleware(brokerx.HandleErrors(policy), broker.RecoverPanics())
+	result, _ := handler.Handle(context.Background(), broker.NewDelivery(broker.Message{}, "orders"))
+	_, rejected := result.(broker.Reject)
+	fmt.Println(rejected)
+	// Output: true
+}
+
+func ExampleRecoverWithAttributes() {
+	callback := brokerx.RecoverWithAttributes(func(_ context.Context, id string) error {
+		panic("processing failed")
+	}, func(id string) []slog.Attr {
+		return []slog.Attr{slog.String("order_id", id)}
+	})
+	err := callback(context.Background(), "order-7")
+	var panicErr *broker.PanicError
+	fmt.Println(errors.As(err, &panicErr))
+	// Output: true
+}
+
+func ExampleFieldErrors() {
+	cfgErr := &broker.FieldError{
+		Field:  "url",
+		Reason: "required",
+		Cause:  errors.New("url is required"),
+	}
+	err := validation.At("broker", brokerx.FieldErrors(cfgErr))
+	var failure *validation.Error
+	if errors.As(err, &failure) {
+		fmt.Println(failure.Violations[0].Field, failure.Violations[0].Rule)
+	}
+	// Output: broker.url required
+}
+
+func ExampleProcessingLogConfig() {
+	policy := brokerx.ErrorPolicy{
+		Retryable: func(error) bool { return true },
+	}
+	config := brokerx.ProcessingLogConfig(policy)
+	fmt.Println(config.Level(broker.RetryAfter{
+		Cause: errors.New("retry"),
+	}, nil))
+	// Output: WARN
+}

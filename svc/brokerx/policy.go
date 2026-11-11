@@ -16,27 +16,27 @@ import (
 
 // ErrorPolicy supplies the retry interval and an optional business exception.
 type ErrorPolicy struct {
+	// RetryDelay must be greater than zero; zero causes immediate redelivery.
 	RetryDelay time.Duration
 	Retryable  func(error) bool
 }
 
 // HandleErrors declares redelivery and rejection and classifies processing errors.
+// Place broker.RecoverPanics inside HandleErrors so it can classify panics.
 func HandleErrors(policy ErrorPolicy) broker.HandlerMiddleware {
 	return broker.HandlerMiddleware{
 		Requirements: []broker.Requirement{broker.RedeliveryRequirement{}, broker.RejectRequirement{}},
 		Wrap: func(next broker.HandlerFunc) broker.HandlerFunc {
 			return func(ctx context.Context, delivery broker.Delivery) (broker.Disposition, error) {
 				result, err := next(ctx, delivery)
+				var txPanic bool
 				if err != nil {
-					err, _ = transaction.NormalizePanic(err)
+					err, txPanic = transaction.NormalizePanic(err)
 				}
 				var handlerPanic *broker.PanicError
-				panicked := errors.As(err, &handlerPanic)
-				var txPanic *sqltx.PanicError
-				panicked = panicked || errors.As(err, &txPanic)
-				transactionFailure := errors.Is(err, sqltx.ErrCommit) || errors.Is(err, sqltx.ErrBegin)
+				failure := txPanic || errors.As(err, &handlerPanic) || errors.Is(err, sqltx.ErrCommit)
 				if ctx.Err() != nil {
-					if err == nil || (!panicked && !transactionFailure && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded)) {
+					if err == nil || (!failure && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded)) {
 						return nil, ctx.Err()
 					}
 					return nil, errors.Join(err, ctx.Err())
@@ -44,10 +44,15 @@ func HandleErrors(policy ErrorPolicy) broker.HandlerMiddleware {
 				if err == nil {
 					return result, nil
 				}
-				if !panicked && !transactionFailure && terminal(err, policy.Retryable) {
-					return broker.Reject{Cause: err}, nil
+				if !failure && terminal(err, policy.Retryable) {
+					return broker.Reject{
+						Cause: err,
+					}, nil
 				}
-				return broker.RetryAfter{Delay: policy.RetryDelay, Cause: err}, nil
+				return broker.RetryAfter{
+					Delay: policy.RetryDelay,
+					Cause: err,
+				}, nil
 			}
 		},
 	}
@@ -60,10 +65,16 @@ func RecoverWithAttributes[T any](callback func(context.Context, T) error, attri
 		returned := false
 		defer func() {
 			if !returned {
-				err = &broker.PanicError{Value: recover(), Stack: debug.Stack()}
+				err = &broker.PanicError{
+					Value: recover(),
+					Stack: debug.Stack(),
+				}
 			}
 			if err != nil {
-				err = &attributedError{cause: err, attributes: attributes(value)}
+				err = &attributedError{
+					cause:      err,
+					attributes: attributes(value),
+				}
 			}
 		}()
 		err = callback(ctx, value)
@@ -72,12 +83,17 @@ func RecoverWithAttributes[T any](callback func(context.Context, T) error, attri
 	}
 }
 
-// ProcessingLogConfig supplies application error severity and attributes.
-func ProcessingLogConfig() broker.ProcessingLogConfig {
+// ProcessingLogConfig supplies application error severity and attributes using
+// the same policy as HandleErrors.
+func ProcessingLogConfig(policy ErrorPolicy) broker.ProcessingLogConfig {
 	return broker.ProcessingLogConfig{
 		Level: func(result broker.Disposition, err error) slog.Level {
 			if _, ok := result.(broker.Reject); ok && err == nil {
 				return slog.LevelInfo
+			}
+			if retry, ok := result.(broker.RetryAfter); ok && err == nil && retry.Cause != nil &&
+				policy.Retryable != nil && policy.Retryable(retry.Cause) {
+				return slog.LevelWarn
 			}
 			return slog.LevelError
 		},
@@ -103,12 +119,20 @@ func ProcessingLogConfig() broker.ProcessingLogConfig {
 				if app.Code != "" {
 					attrs = append(attrs, slog.String("code", app.Code))
 				}
-				for _, field := range app.Violations {
-					attrs = append(attrs, slog.String("field", field.Field), slog.String("rule", field.Rule), slog.String("param", field.Param))
+				if len(app.Violations) != 0 {
+					violations := make([]logViolation, 0, len(app.Violations))
+					for _, field := range app.Violations {
+						violations = append(violations, logViolation{
+							Field: field.Field,
+							Rule:  field.Rule,
+							Param: field.Param,
+						})
+					}
+					attrs = append(attrs, slog.Any("violations", violations))
 				}
 			}
 			var field *broker.FieldError
-			if errors.As(err, &field) {
+			if app == nil && errors.As(err, &field) {
 				attrs = append(attrs, slog.String("field", field.Field), slog.String("rule", field.Reason))
 				var constraint interface{ Param() string }
 				if errors.As(field.Cause, &constraint) {
@@ -129,16 +153,27 @@ type attributedError struct {
 	attributes []slog.Attr
 }
 
+type logViolation struct {
+	Field string `json:"field"`
+	Rule  string `json:"rule"`
+	Param string `json:"param,omitempty"`
+}
+
 func (e *attributedError) Error() string { return e.cause.Error() }
 func (e *attributedError) Unwrap() error { return e.cause }
 
 func terminal(err error, retryable func(error) bool) bool {
-	switch e := err.(type) {
-	case *broker.DecodeError:
-		return true
-	case *broker.StageError:
-		if e.Stage == broker.StageMetadata {
+	// Like broker's own processing check, the first decode or stage error in the
+	// chain decides: a decode failure or a metadata stage is a poison message.
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		if _, ok := cause.(*broker.DecodeError); ok {
 			return true
+		}
+		if stage, ok := cause.(*broker.StageError); ok {
+			if stage.Stage == broker.StageMetadata {
+				return true
+			}
+			break
 		}
 	}
 	var app *apperror.Error

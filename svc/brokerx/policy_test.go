@@ -28,7 +28,7 @@ func TestHandleErrorsClassifiesProcessingFailures(t *testing.T) {
 		{"nested decode", &broker.StageError{Stage: broker.StageHandle, Cause: &broker.DecodeError{Cause: failure}}, false, false, "retry"},
 		{"application", terminal, false, false, "reject"},
 		{"exception", terminal, false, true, "retry"},
-		{"begin", errors.Join(sqltx.ErrBegin, terminal), false, false, "retry"},
+		{"begin", errors.Join(sqltx.ErrBegin, terminal), false, false, "reject"},
 		{"uncertain commit", errors.Join(sqltx.ErrCommit, terminal), false, false, "retry"},
 		{"transaction panic", &sqltx.PanicError{Value: terminal}, false, false, "retry"},
 		{"handler panic", &broker.PanicError{Value: terminal}, false, false, "retry"},
