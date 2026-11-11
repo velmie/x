@@ -101,3 +101,22 @@ func TestSquashedDefaultsAndInspection(t *testing.T) {
 	}
 	t.Fatal("timeout is missing from inspection")
 }
+
+func TestSquashedCollectionElementInspection(t *testing.T) {
+	type endpoint struct {
+		SquashConnection `k:",squash"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	fields, err := DescribeStruct[config]()
+	require.NoError(t, err)
+	elements, ok := fields.Element("endpoints")
+	require.True(t, ok)
+	url, ok := elements.Lookup("url")
+	require.True(t, ok)
+	require.Equal(t, []int{0, 0}, url.Index)
+	rows, err := Inspect(fields, config{Endpoints: map[string]endpoint{"crm": {SquashConnection: SquashConnection{URL: "private", Timeout: "3s"}}}}, Snapshot{}, InspectOptions{})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"crm": map[string]any{"url": "[REDACTED]", "timeout": "3s"}}, rows[0].Value)
+}

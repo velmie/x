@@ -479,3 +479,27 @@ uses concrete paths such as `routes.0.endpoint`. Structured collections are
 projected using configuration tag names, and sensitive members are redacted
 before formatting. `DescribeStruct` returns metadata, including raw tag defaults,
 and does not itself redact them.
+
+Environment variables can override fields of collection elements that already
+exist in defaults, files, or readers. For example, with the `WH` prefix,
+`WH_ENDPOINTS_CRM_EU_URL` addresses `endpoints.crm_eu.url`, and
+`WH_ROUTES_0_ENDPOINT` addresses the first route's `endpoint`. The loader uses
+the existing map keys and slice indexes to determine boundaries, so underscores
+in a map key are not split. Environment variables do not add map entries or
+extend structured slices. Flags and programmatic overrides are applied later.
+
+```go
+loader := confload.New(
+    confload.WithEnvPrefix("WH"),
+    confload.WithFiles("config.yaml"),
+    confload.WithStrict(),
+)
+cfg, snapshot, err := confload.LoadIntoWithSnapshot[Config](loader)
+```
+
+A whole-collection environment value takes precedence over descendant variables.
+Aliases take precedence over a custom naming function and the default name.
+If a present variable maps to more than one path involving a collection element,
+loading returns a collision error. Use `WithEnvAliases` to give the paths distinct
+names. The default naming function retains dashes. A custom naming function can
+replace them when an environment requires portable names.

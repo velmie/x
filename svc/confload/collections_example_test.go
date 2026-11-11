@@ -3,6 +3,8 @@ package confload
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -150,4 +152,37 @@ func TestSensitiveCollectionDoesNotExposeKeys(t *testing.T) {
 		require.NoError(t, WriteInspection(&output, format, rows))
 		require.NotContains(t, output.String(), "private-key")
 	}
+}
+
+func ExampleLoader_collectionEnvironment() {
+	type endpoint struct {
+		URL string `k:"url"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	const name = "CONFLOAD_EXAMPLE_ENDPOINTS_CRM_EU_URL"
+	old, existed := os.LookupEnv(name)
+	if err := os.Setenv(name, "https://example.com"); err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer func() {
+		if existed {
+			_ = os.Setenv(name, old)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	}()
+	loader := New(
+		WithEnvPrefix("CONFLOAD_EXAMPLE"),
+		WithReader("config.yaml", strings.NewReader("endpoints:\n  crm_eu: {}\n")),
+	)
+	cfg, err := LoadInto[config](loader)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(cfg.Endpoints["crm_eu"].URL)
+	// Output: https://example.com
 }

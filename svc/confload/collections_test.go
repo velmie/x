@@ -1,7 +1,10 @@
 package confload
 
 import (
+	"encoding/json"
 	"errors"
+	"flag"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -318,4 +321,285 @@ func TestCollectionDefaultsKeepUntaggedTypedZero(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, cfg.Items["crm"].Count)
 	require.Equal(t, 7, cfg.Items["crm"].Weight)
+}
+
+func TestCollectionEnvironmentElements(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password" sensitive:"true"`
+	}
+	type route struct {
+		Endpoint string `k:"endpoint"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+		Routes    []route             `k:"routes"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_EU_PASSWORD", "from-env")
+	t.Setenv("APP_ROUTES_0_ENDPOINT", "crm_eu")
+	loader := New(WithEnvPrefix("APP"), WithReader("input.yaml", strings.NewReader("endpoints:\n  crm_eu: {}\nroutes:\n  - {}\n")))
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](loader)
+	require.NoError(t, err)
+	require.Equal(t, "from-env", cfg.Endpoints["crm_eu"].Password)
+	require.Equal(t, "crm_eu", cfg.Routes[0].Endpoint)
+	require.Equal(t, SourceEnv, snapshot.Origins["endpoints.crm_eu.password"].Source)
+	require.Equal(t, SourceEnv, snapshot.Origins["routes.0.endpoint"].Source)
+}
+
+func TestCollectionEnvironmentPrecedenceAndAliases(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+		Allowed   []string            `k:"allowed"`
+	}
+	t.Setenv("SPECIAL_PASSWORD", "aliased")
+	t.Setenv("APP_ENDPOINTS_CRM_EU_PASSWORD", "ignored")
+	t.Setenv("APP_ALLOWED_0", "one")
+	t.Setenv("APP_ALLOWED_1", "two")
+	t.Setenv("APP_ENDPOINTS_MISSING_PASSWORD", "no-entry")
+	loader := New(
+		WithEnvPrefix("APP"),
+		WithEnvAliases(map[string]string{"endpoints.crm_eu.password": "SPECIAL_PASSWORD"}),
+		WithReader("input.json", strings.NewReader(`{"endpoints":{"crm_eu":{}}}`)),
+	)
+	cfg, err := LoadInto[config](loader)
+	require.NoError(t, err)
+	require.Equal(t, "aliased", cfg.Endpoints["crm_eu"].Password)
+	require.Len(t, cfg.Endpoints, 1)
+	require.Equal(t, []string{"one", "two"}, cfg.Allowed)
+}
+
+func TestCollectionEnvironmentCollision(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_A_B_PASSWORD", "private")
+	loader := New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"endpoints":{"a_b":{},"a.b":{}}}`)))
+	_, err := LoadInto[config](loader)
+	require.ErrorContains(t, err, "APP_ENDPOINTS_A_B_PASSWORD")
+	require.ErrorContains(t, err, "endpoints.a_b.password")
+	require.ErrorContains(t, err, "endpoints.a.b.password")
+	require.NotContains(t, err.Error(), "private")
+}
+
+func TestCollectionEnvironmentOverrideAndEmpty(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password" default:"fallback"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_PASSWORD", "")
+	loader := New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`)))
+	cfg, err := LoadInto[config](loader)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Endpoints["crm"].Password)
+	loader = New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`)), WithOverrides(map[string]any{"endpoints.crm.password": "override"}))
+	cfg, err = LoadInto[config](loader)
+	require.NoError(t, err)
+	require.Equal(t, "override", cfg.Endpoints["crm"].Password)
+}
+
+func TestCollectionEnvironmentWholeCollectionWins(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password" json:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS", `{"crm":{"password":"whole"}}`)
+	t.Setenv("APP_ENDPOINTS_CRM_PASSWORD", "descendant")
+	hook := func(from, to reflect.Type, value any) (any, error) {
+		if from.Kind() != reflect.String || to != reflect.TypeFor[map[string]endpoint]() {
+			return value, nil
+		}
+		var result map[string]endpoint
+		if err := json.Unmarshal([]byte(value.(string)), &result); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	cfg, err := LoadInto[config](New(WithEnvPrefix("APP"), WithDecodeHooks(hook), WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`))))
+	require.NoError(t, err)
+	require.Equal(t, "whole", cfg.Endpoints["crm"].Password)
+}
+
+func TestCollectionEnvironmentCustomNamingAndCollisionAlias(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_A_B_PASSWORD", "custom")
+	t.Setenv("OTHER_PASSWORD", "alias")
+	loader := New(
+		WithEnvPrefix("APP"),
+		WithEnvKeyFunc(func(prefix, path string) string { return strings.ReplaceAll(EnvName(prefix, path), "-", "_") }),
+		WithEnvAliases(map[string]string{"endpoints.a_b.password": "OTHER_PASSWORD"}),
+		WithReader("input.json", strings.NewReader(`{"endpoints":{"a-b":{},"a_b":{}}}`)),
+	)
+	cfg, err := LoadInto[config](loader)
+	require.NoError(t, err)
+	require.Equal(t, "custom", cfg.Endpoints["a-b"].Password)
+	require.Equal(t, "alias", cfg.Endpoints["a_b"].Password)
+}
+
+func TestCollectionEnvironmentScalarMapEntries(t *testing.T) {
+	type config struct {
+		Headers map[string]string `k:"headers" sensitive:"true"`
+	}
+	t.Setenv("APP_HEADERS_API_KEY", "env-value")
+	t.Setenv("APP_HEADERS_OTHER", "must-not-create")
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"headers":{"api_key":"file-value"}}`))))
+	require.NoError(t, err)
+	require.Equal(t, "env-value", cfg.Headers["api_key"])
+	require.Len(t, cfg.Headers, 1)
+	require.Equal(t, SourceEnv, snapshot.Origins["headers.api_key"].Source)
+}
+
+func TestCollectionEnvironmentCollisionWithStaticField(t *testing.T) {
+	type endpoint struct {
+		Password string `k:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+		Flat      string              `k:"endpoints_crm_password"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_PASSWORD", "value")
+	_, err := LoadInto[config](New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`))))
+	require.ErrorContains(t, err, "APP_ENDPOINTS_CRM_PASSWORD")
+	require.ErrorContains(t, err, "endpoints_crm_password")
+	require.ErrorContains(t, err, "endpoints.crm.password")
+}
+
+func TestCollectionEnvironmentNestedScalarList(t *testing.T) {
+	type endpoint struct {
+		Names []string `k:"names"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_NAMES_0", "one")
+	t.Setenv("APP_ENDPOINTS_CRM_NAMES_1", "two")
+	cfg, err := LoadInto[config](New(WithEnvPrefix("APP"), WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`))))
+	require.NoError(t, err)
+	require.Equal(t, []string{"one", "two"}, cfg.Endpoints["crm"].Names)
+}
+
+func TestCollectionEnvironmentIndexedCollision(t *testing.T) {
+	type endpoint struct {
+		Names []string `k:"names"`
+	}
+	type config struct {
+		Names     []string            `k:"names"`
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("SHARED_0", "private-value")
+	loader := New(
+		WithEnvAliases(map[string]string{"names": "SHARED", "endpoints.crm.names": "SHARED"}),
+		WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`)),
+	)
+	_, err := LoadInto[config](loader)
+	require.ErrorContains(t, err, "SHARED_0")
+	require.ErrorContains(t, err, "names")
+	require.ErrorContains(t, err, "endpoints.crm.names")
+	require.NotContains(t, err.Error(), "private-value")
+}
+
+func TestCollectionEnvironmentNilNestedPointer(t *testing.T) {
+	type auth struct {
+		Password string `k:"password"`
+	}
+	type endpoint struct {
+		Auth *auth `k:"auth"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_AUTH_PASSWORD", "value")
+	provided := map[string]endpoint{"crm": {Auth: nil}}
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](New(WithEnvPrefix("APP"), WithDefaults(map[string]any{"endpoints": provided})))
+	require.NoError(t, err)
+	require.Equal(t, SourceEnv, snapshot.Origins["endpoints.crm.auth.password"].Source)
+	require.NotNil(t, cfg.Endpoints["crm"].Auth)
+	require.Equal(t, "value", cfg.Endpoints["crm"].Auth.Password)
+	require.Nil(t, provided["crm"].Auth)
+}
+
+func TestCollectionInspectionElementOrigins(t *testing.T) {
+	type route struct {
+		Endpoint string `k:"endpoint"`
+	}
+	type config struct {
+		Routes []route `k:"routes"`
+	}
+	loader := New(WithReader("input.yaml", strings.NewReader("routes:\n  - endpoint: reader-value\n")))
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](loader)
+	require.NoError(t, err)
+	fields, err := DescribeStruct[config]()
+	require.NoError(t, err)
+	rows, err := loader.Inspect(fields, cfg, snapshot, InspectOptions{})
+	require.NoError(t, err)
+	for i := range rows {
+		if rows[i].Field.Path == "routes.0.endpoint" {
+			require.Equal(t, SourceReader, rows[i].Origin.Source)
+			return
+		}
+	}
+	t.Fatal("missing route element row")
+}
+
+func TestCollectionInspectionTypedElementOrigins(t *testing.T) {
+	type endpoint struct {
+		URL      string `k:"url"`
+		Password string `k:"password" sensitive:"true"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	loader := New(WithDefaults(map[string]any{"endpoints": map[string]endpoint{"crm": {URL: "value"}}}))
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](loader)
+	require.NoError(t, err)
+	fields, err := DescribeStruct[config]()
+	require.NoError(t, err)
+	rows, err := loader.Inspect(fields, cfg, snapshot, InspectOptions{})
+	require.NoError(t, err)
+	for i := range rows {
+		if rows[i].Field.Path == "endpoints.crm.url" {
+			require.Equal(t, SourceDefaults, rows[i].Origin.Source)
+			return
+		}
+	}
+	t.Fatal("missing endpoint element row")
+}
+
+func TestCollectionEnvironmentRespectsLaterSources(t *testing.T) {
+	type endpoint struct {
+		URL      string `k:"url"`
+		Password string `k:"password"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints"`
+	}
+	t.Setenv("APP_ENDPOINTS_CRM_PASSWORD", "environment")
+	t.Setenv("APP_ENDPOINTS_LATER_PASSWORD", "must-not-apply")
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.String("endpoints.crm.password", "", "password")
+	require.NoError(t, flags.Set("endpoints.crm.password", "flag"))
+	loader := New(
+		WithEnvPrefix("APP"),
+		WithReader("input.json", strings.NewReader(`{"endpoints":{"crm":{}}}`)),
+		WithFlagSet(flags),
+		WithOverrides(map[string]any{"endpoints.later.url": "later"}),
+	)
+	cfg, err := LoadInto[config](loader)
+	require.NoError(t, err)
+	require.Equal(t, "flag", cfg.Endpoints["crm"].Password)
+	require.Equal(t, "later", cfg.Endpoints["later"].URL)
+	require.Empty(t, cfg.Endpoints["later"].Password)
 }

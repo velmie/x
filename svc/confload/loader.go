@@ -455,6 +455,11 @@ func (l *Loader) snapshot(
 	}
 	files = append(files, loadedFiles...)
 
+	k, err = l.loadCollectionEnv(k, fields, keys, origins, boundaryOrigins)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := l.loadEnv(k, keys, origins, boundaryOrigins); err != nil {
 		return nil, err
 	}
@@ -490,6 +495,16 @@ func (l *Loader) snapshot(
 		}
 		if _, ok := origins[key]; ok {
 			values[key] = k.Get(key)
+		}
+	}
+
+	for key, origin := range boundaryOrigins {
+		origins[key] = origin
+	}
+	for i := range fields {
+		field := &fields[i]
+		if field.element != nil {
+			recordElementOrigins(schemaValue(reflect.ValueOf(k.Get("")), field.path), field.element, field.path, origins)
 		}
 	}
 
@@ -927,6 +942,305 @@ func recordTreeOrigins(v reflect.Value, path string, origin ValueOrigin, origins
 	if v.IsValid() && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) {
 		for i := 0; i < v.Len(); i++ {
 			recordTreeOrigins(v.Index(i), path+"."+strconv.Itoa(i), origin, origins)
+		}
+	}
+}
+
+type collectionEnvTarget struct {
+	path     string
+	segments []string
+}
+
+func (l *Loader) loadCollectionEnv(
+	k *koanf.Koanf,
+	fields []schemaField,
+	keys []string,
+	origins map[string]ValueOrigin,
+	boundaryOrigins map[string]ValueOrigin,
+) (*koanf.Koanf, error) {
+	raw := normalizeObject(reflect.ValueOf(k.Raw()))
+	var targets []collectionEnvTarget
+	for i := range fields {
+		field := &fields[i]
+		if field.element == nil {
+			continue
+		}
+		value, err := collectCollectionEnv(schemaValue(reflect.ValueOf(raw), field.path), field.element, strings.Split(field.path, "."), &targets)
+		if err != nil {
+			return nil, fmt.Errorf("enumerate environment targets at %s: %w", field.path, err)
+		}
+		if value != nil {
+			setSchemaValue(raw, field.path, value)
+		}
+	}
+	if len(targets) == 0 {
+		return k, nil
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
+
+	names := make(map[string][]string)
+	dynamic := make(map[string]bool)
+	addNames := func(path string, collection bool) {
+		base := l.EnvName(path)
+		if base == "" {
+			return
+		}
+		if _, ok := os.LookupEnv(base); ok {
+			names[base] = append(names[base], path)
+			dynamic[base] = dynamic[base] || collection
+			return
+		}
+		for i := 0; ; i++ {
+			name := base + "_" + strconv.Itoa(i)
+			if _, ok := os.LookupEnv(name); !ok {
+				break
+			}
+			names[name] = append(names[name], path)
+			dynamic[name] = dynamic[name] || collection
+		}
+	}
+	for _, key := range keys {
+		addNames(key, false)
+	}
+	for _, target := range targets {
+		addNames(target.path, true)
+	}
+	envNames := make([]string, 0, len(names))
+	for name := range names {
+		envNames = append(envNames, name)
+	}
+	sort.Strings(envNames)
+	for _, name := range envNames {
+		paths := names[name]
+		if dynamic[name] && len(paths) > 1 {
+			sort.Strings(paths)
+			return nil, fmt.Errorf("environment variable %s conflicts between paths %s", name, strings.Join(paths, ", "))
+		}
+	}
+	staticValues := readEnvExact(l.opts.EnvPrefix, keys, l.opts.EnvKeyFunc, l.opts.EnvAliases)
+	dynamicValues := make(map[string]any)
+	for _, target := range targets {
+		name := l.EnvName(target.path)
+		if name == "" {
+			continue
+		}
+		if value, ok := os.LookupEnv(name); ok {
+			dynamicValues[target.path] = value
+			continue
+		}
+		if values := readEnvList(name); len(values) > 0 {
+			dynamicValues[target.path] = values
+		}
+	}
+	applied := false
+	for _, target := range targets {
+		value, ok := dynamicValues[target.path]
+		if !ok {
+			continue
+		}
+		blocked := false
+		for parent := parentPath(target.path); parent != ""; parent = parentPath(parent) {
+			if _, ok := staticValues[parent]; ok {
+				blocked = true
+				break
+			}
+			if _, ok := dynamicValues[parent]; ok {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		name := l.EnvName(target.path)
+		if setCollectionEnvValue(raw, target.segments, value) {
+			origin := ValueOrigin{Source: SourceEnv, Identifier: name}
+			origins[target.path] = origin
+			boundaryOrigins[target.path] = origin
+			applied = true
+		}
+	}
+	if !applied {
+		return k, nil
+	}
+	updated := koanf.New(".")
+	if err := updated.Load(confmap.Provider(raw, ""), nil); err != nil {
+		return nil, fmt.Errorf("load collection environment: %w", err)
+	}
+	return updated, nil
+}
+
+func collectCollectionEnv(v reflect.Value, node *schemaNode, segments []string, targets *[]collectionEnvTarget) (any, error) {
+	v = indirectValue(v)
+	if !v.IsValid() {
+		return nil, nil
+	}
+	switch node.kind {
+	case reflect.Map:
+		if v.Kind() != reflect.Map || v.IsNil() || v.Type().Key().Kind() != reflect.String {
+			return nil, nil
+		}
+		if node.element == nil {
+			if node.typ.Elem().Kind() == reflect.Interface {
+				return nil, nil
+			}
+			out := make(map[string]any, v.Len())
+			iter := v.MapRange()
+			for iter.Next() {
+				parts := appendSegments(segments, iter.Key().String())
+				*targets = append(*targets, collectionEnvTarget{path: strings.Join(parts, "."), segments: parts})
+				out[iter.Key().String()] = iter.Value().Interface()
+			}
+			return out, nil
+		}
+		out := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key().String()
+			original := iter.Value()
+			value, err := collectCollectionEnv(original, node.element, appendSegments(segments, key), targets)
+			if err != nil {
+				return nil, err
+			}
+			if value == nil {
+				value = original.Interface()
+			}
+			out[key] = value
+		}
+		return out, nil
+	case reflect.Slice, reflect.Array:
+		if (v.Kind() != reflect.Slice && v.Kind() != reflect.Array) || (v.Kind() == reflect.Slice && v.IsNil()) || node.element == nil {
+			return nil, nil
+		}
+		out := make([]any, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			original := v.Index(i)
+			value, err := collectCollectionEnv(original, node.element, appendSegments(segments, strconv.Itoa(i)), targets)
+			if err != nil {
+				return nil, err
+			}
+			if value == nil {
+				value = original.Interface()
+			}
+			out[i] = value
+		}
+		return out, nil
+	case reflect.Struct:
+		if v.Kind() == reflect.Struct {
+			m, err := configurationStructMap(v, node.tag, node.fields)
+			if err != nil {
+				return nil, err
+			}
+			v = reflect.ValueOf(m)
+		}
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || v.IsNil() {
+			return nil, nil
+		}
+		object := normalizeObject(v)
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.container {
+				continue
+			}
+			parts := appendSegments(segments, strings.Split(field.path, ".")...)
+			*targets = append(*targets, collectionEnvTarget{path: strings.Join(parts, "."), segments: parts})
+			if field.element != nil {
+				value, err := collectCollectionEnv(schemaValue(reflect.ValueOf(object), field.path), field.element, parts, targets)
+				if err != nil {
+					return nil, err
+				}
+				if value != nil {
+					setSchemaValue(object, field.path, value)
+				}
+			}
+		}
+		return object, nil
+	}
+	return nil, nil
+}
+
+func appendSegments(base []string, parts ...string) []string {
+	out := make([]string, 0, len(base)+len(parts))
+	out = append(out, base...)
+	return append(out, parts...)
+}
+
+func setCollectionEnvValue(root map[string]any, parts []string, value any) bool {
+	var current any = root
+	for i, part := range parts {
+		last := i == len(parts)-1
+		switch node := current.(type) {
+		case map[string]any:
+			if last {
+				node[part] = value
+				return true
+			}
+			next, ok := node[part]
+			if !ok || !indirectValue(reflect.ValueOf(next)).IsValid() {
+				next = make(map[string]any)
+				node[part] = next
+			}
+			current = next
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(node) {
+				return false
+			}
+			if last {
+				node[index] = value
+				return true
+			}
+			current = node[index]
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func recordElementOrigins(v reflect.Value, node *schemaNode, path string, origins map[string]ValueOrigin) {
+	v = indirectValue(v)
+	if !v.IsValid() {
+		return
+	}
+	switch node.kind {
+	case reflect.Map:
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || node.element == nil {
+			return
+		}
+		iter := v.MapRange()
+		for iter.Next() {
+			recordElementOrigins(iter.Value(), node.element, configurationPath(path, iter.Key().String()), origins)
+		}
+	case reflect.Slice, reflect.Array:
+		if (v.Kind() != reflect.Slice && v.Kind() != reflect.Array) || node.element == nil {
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			recordElementOrigins(v.Index(i), node.element, path+"."+strconv.Itoa(i), origins)
+		}
+	case reflect.Struct:
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.container {
+				continue
+			}
+			value := schemaFieldValue(v, field)
+			if !value.IsValid() {
+				continue
+			}
+			full := path + "." + field.path
+			if _, ok := origins[full]; !ok {
+				for parent := parentPath(full); parent != ""; parent = parentPath(parent) {
+					if origin, ok := origins[parent]; ok {
+						origins[full] = origin
+						break
+					}
+				}
+			}
+			if field.element != nil {
+				recordElementOrigins(value, field.element, full, origins)
+			}
 		}
 	}
 }

@@ -174,7 +174,15 @@ func indirectValue(v reflect.Value) reflect.Value {
 }
 
 func configurationPath(base, key string) string {
-	if strings.ContainsAny(key, ".[]\" ") || key == "" {
+	plain := key != ""
+	for _, r := range key {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		plain = false
+		break
+	}
+	if !plain {
 		return base + "[" + strconv.Quote(key) + "]"
 	}
 	if base == "" {
