@@ -65,9 +65,8 @@ case err != nil:
 }
 ```
 
-Enabled setup requires `service.name` and `service.version` to contain 1 to 128
-ASCII letters, digits, or `._-+`, and requires `OTEL_RESOURCE_ATTRIBUTES` to be
-unset or empty.
+Enabled setup requires string attributes `service.name` and `service.version`, a
+non-empty environment, and an unset or empty `OTEL_RESOURCE_ATTRIBUTES`.
 
 `SetupService` owns its exporters, HTTP transport, and exclusive stdout output
 file. It does not install global providers. Collector HTTP error bodies and gRPC

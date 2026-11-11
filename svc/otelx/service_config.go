@@ -23,7 +23,7 @@ type ServiceConfig struct {
 	CAFile          string            `k:"ca_file" hint:"PEM trust roots for collector TLS"`
 	Headers         map[string]string `k:"headers" hint:"Collector authentication headers" sensitive:"true"`
 	SampleRatio     float64           `k:"sample_ratio" default:"1" hint:"Root trace sampling ratio" validate:"gte=0,lte=1"`
-	Environment     string            `k:"environment" default:"local" hint:"Bounded deployment environment name"`
+	Environment     string            `k:"environment" default:"local" hint:"Non-empty deployment environment name" validate:"required"`
 	Propagation     PropagationFormat `k:"propagation" default:"w3c" hint:"Peer encoding" validate:"omitempty,oneof=w3c b3-single b3-multi"`
 	AllowBaggage    bool              `k:"allow_baggage" default:"false" hint:"Permit interactive or batch traffic.class"`
 	StdoutFile      string            `k:"stdout_file" hint:"New exclusive file for stdout trace export"`
@@ -63,9 +63,6 @@ func ValidateServiceConfig(cfg ServiceConfig) error {
 	}
 	if cfg.RuntimeMetrics && cfg.MetricsMode != "prometheus" {
 		return configFailure("runtime_metrics", configRuleValue, "runtime metrics require Prometheus mode", nil)
-	}
-	if !safeResourceValue(cfg.Environment) {
-		return configFailure("environment", configRuleFormat, "1 to 128 ASCII letters, digits or ._-+", nil)
 	}
 	if cfg.TraceProtocol == "stdout" && (cfg.StdoutFile == "" || len(cfg.StdoutFile) > 4096 || strings.ContainsAny(cfg.StdoutFile, "\x00\r\n")) {
 		return configFailure("stdout_file", configRuleFormat, "nonempty file path of at most 4096 bytes", nil)
@@ -127,18 +124,6 @@ func configFailure(field, rule, param string, cause error) error {
 }
 func networkSelected(cfg ServiceConfig) bool {
 	return cfg.TraceProtocol != "stdout" || cfg.MetricsMode != "prometheus"
-}
-
-func safeResourceValue(value string) bool {
-	if len(value) < 1 || len(value) > 128 {
-		return false
-	}
-	for _, char := range value {
-		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && !strings.ContainsRune("._-+", char) {
-			return false
-		}
-	}
-	return true
 }
 
 func validateEndpoint(endpoint string, localPlaintext bool) error {

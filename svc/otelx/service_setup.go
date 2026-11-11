@@ -27,7 +27,8 @@ import (
 )
 
 // SetupService opens the selected pipelines and owns their resources.
-// res supplies explicit service identity and is required when enabled.
+// res supplies service.name and service.version as string attributes and is required
+// when enabled. Environment must be non-empty.
 // No global providers are installed. Stop producers and scraping before Shutdown.
 // Collector HTTP error bodies and gRPC status messages are dropped because they
 // may echo request headers. Collector redirects are rejected without exposing
@@ -41,8 +42,8 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 	}
 	for _, key := range []attribute.Key{"service.name", "service.version"} {
 		value, ok := res.Set().Value(key)
-		if !ok || value.Type() != attribute.STRING || !safeResourceValue(value.AsString()) {
-			return nil, fmt.Errorf("telemetry resource attribute %s: expected 1 to 128 ASCII letters, digits or ._-+: %w", key, ErrInvalidConfig)
+		if !ok || value.Type() != attribute.STRING {
+			return nil, fmt.Errorf("telemetry resource attribute %s: expected a string: %w", key, ErrInvalidConfig)
 		}
 	}
 	if os.Getenv(resourceAttributesEnv) != "" {
