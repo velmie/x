@@ -453,3 +453,29 @@ type Services struct {
 ```bash
 go test ./...
 ```
+
+### Inspecting structured collections
+
+Use `Element` to inspect metadata declared on map and slice elements:
+
+```go
+fields, err := confload.DescribeStruct[Config]()
+if err != nil {
+    return err
+}
+element, ok := fields.Element("endpoints")
+if ok {
+    timeout, found := element.Lookup("timeout")
+    _ = timeout
+    _ = found
+}
+```
+
+`Element` returns paths and reflection indexes relative to the element. The
+existing field list continues to contain the collection itself. Inspection adds
+metadata rows such as `endpoints.<name>.url` and `routes[].endpoint`; their
+environment names are patterns rather than override paths. Value inspection
+uses concrete paths such as `routes.0.endpoint`. Structured collections are
+projected using configuration tag names, and sensitive members are redacted
+before formatting. `DescribeStruct` returns metadata, including raw tag defaults,
+and does not itself redact them.

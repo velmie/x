@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/knadh/koanf/v2"
 )
@@ -106,7 +108,16 @@ func inspect(
 	}
 	rows := make([]InspectionField, 0, fields.Len())
 	for _, field := range fields.Fields() {
-		sensitive := field.Attributes[sensitiveTag] == sensitiveTagEnabled || collectionContainsSensitive(field.Type)
+		var node *schemaNode
+		for i := range fields.schema.fields {
+			item := &fields.schema.fields[i]
+			if item.path == field.Path {
+				node = item.element
+				break
+			}
+		}
+		sensitive := field.Attributes[sensitiveTag] == sensitiveTagEnabled ||
+			(node == nil && collectionContainsSensitive(field.Type))
 		if sensitive {
 			field.Default = inspectionRedacted
 		} else if defaults != nil {
@@ -115,6 +126,9 @@ func inspect(
 			} else if provided.Exists(field.Path) {
 				field.Default = defaults.Get(field.Path)
 			}
+		}
+		if node != nil && field.Default != nil && !sensitive {
+			field.Default = projectCollection(node, reflect.ValueOf(field.Default))
 		}
 		row := InspectionField{
 			Field: field,
@@ -128,13 +142,29 @@ func inspect(
 				if err != nil {
 					return nil, err
 				}
+				if node != nil {
+					value = projectCollection(node, reflect.ValueOf(value))
+				}
 				row.Value = value
 			}
-			origin := inspectionOrigin(snapshot.Origins[field.Path], snapshot.Files, row.Env, opts.OverrideLabel)
+			originValue := snapshot.Origins[field.Path]
+			if node != nil {
+				originValue = collectionOrigin(field.Path, originValue, snapshot.Origins)
+			}
+			origin := inspectionOrigin(originValue, snapshot.Files, row.Env, opts.OverrideLabel)
 			row.Origin = &origin
 		}
 		rows = append(rows, row)
+		if node != nil && (!sensitive || decoded == nil) {
+			var v reflect.Value
+			if decoded != nil {
+				value, _ := inspectionValue(root, &field)
+				v = reflect.ValueOf(value)
+			}
+			rows = appendElementRows(rows, node, field.Path, v, decoded != nil, snapshot, opts, envName, fields.schema.tagName)
+		}
 	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Field.Path < rows[j].Field.Path })
 	return rows, nil
 }
 
@@ -329,4 +359,239 @@ func inspectionOrigin(origin ValueOrigin, files []string, env, label string) Val
 			Identifier: string(inspectionUnknownSource),
 		}
 	}
+}
+
+func projectCollection(node *schemaNode, v reflect.Value) any {
+	for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	if !v.IsValid() {
+		return nil
+	}
+	switch node.kind {
+	case reflect.Map:
+		if v.Kind() != reflect.Map {
+			return v.Interface()
+		}
+		if v.IsNil() {
+			return nil
+		}
+		out := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key().String()
+			if node.element == nil {
+				out[key] = iter.Value().Interface()
+			} else {
+				out[key] = projectCollection(node.element, iter.Value())
+			}
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
+			return v.Interface()
+		}
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			return nil
+		}
+		out := make([]any, v.Len())
+		for i := range out {
+			if node.element == nil {
+				out[i] = v.Index(i).Interface()
+			} else {
+				out[i] = projectCollection(node.element, v.Index(i))
+			}
+		}
+		return out
+	case reflect.Struct:
+		out := make(map[string]any)
+		skipped := make([]string, 0)
+		for i := range node.fields {
+			field := &node.fields[i]
+			skip := false
+			for _, parent := range skipped {
+				if strings.HasPrefix(field.path, parent+".") {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if field.container {
+				fv := projectionField(v, field)
+				if field.sensitive {
+					setProjected(out, field.path, inspectionRedacted)
+					skipped = append(skipped, field.path)
+					continue
+				}
+				if !fv.IsValid() || ((fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Interface) && fv.IsNil()) {
+					setProjected(out, field.path, nil)
+					skipped = append(skipped, field.path)
+				}
+				continue
+			}
+			var value any
+			if field.sensitive {
+				value = inspectionRedacted
+			} else {
+				fv := projectionField(v, field)
+				if fv.IsValid() {
+					if field.element != nil {
+						value = projectCollection(field.element, fv)
+					} else if fv.CanInterface() {
+						value = fv.Interface()
+					}
+				}
+			}
+			setProjected(out, field.path, value)
+		}
+		return out
+	}
+	return v.Interface()
+}
+
+func projectionField(v reflect.Value, field *schemaField) reflect.Value {
+	if v.Kind() == reflect.Struct {
+		for _, i := range field.index {
+			for v.IsValid() && v.Kind() == reflect.Pointer {
+				if v.IsNil() {
+					return reflect.Value{}
+				}
+				v = v.Elem()
+			}
+			if !v.IsValid() || v.Kind() != reflect.Struct {
+				return reflect.Value{}
+			}
+			v = v.Field(i)
+		}
+		return v
+	}
+	for _, part := range strings.Split(field.path, ".") {
+		for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
+			if v.IsNil() {
+				return reflect.Value{}
+			}
+			v = v.Elem()
+		}
+		if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+			return reflect.Value{}
+		}
+		v = v.MapIndex(reflect.ValueOf(part).Convert(v.Type().Key()))
+	}
+	return v
+}
+
+func setProjected(out map[string]any, path string, value any) {
+	parts := strings.Split(path, ".")
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := out[part].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			out[part] = next
+		}
+		out = next
+	}
+	out[parts[len(parts)-1]] = value
+}
+
+func appendElementRows(
+	rows []InspectionField,
+	node *schemaNode,
+	path string,
+	v reflect.Value,
+	values bool,
+	snapshot Snapshot,
+	opts InspectOptions,
+	env func(string) string,
+	tag string,
+) []InspectionField {
+	for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
+		if v.IsNil() {
+			v = reflect.Value{}
+			break
+		}
+		v = v.Elem()
+	}
+	if node.kind == reflect.Map || node.kind == reflect.Slice || node.kind == reflect.Array {
+		if node.element == nil {
+			return rows
+		}
+		if !values {
+			suffix := "[]"
+			if node.kind == reflect.Map {
+				suffix = ".<name>"
+			}
+			return appendElementRows(rows, node.element, path+suffix, reflect.Value{}, false, snapshot, opts, env, tag)
+		}
+		if !v.IsValid() {
+			return rows
+		}
+		if node.kind == reflect.Map && v.Kind() == reflect.Map {
+			keys := v.MapKeys()
+			sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+			for _, key := range keys {
+				rows = appendElementRows(rows, node.element, path+"."+key.String(), v.MapIndex(key), true, snapshot, opts, env, tag)
+			}
+		}
+		if (node.kind == reflect.Slice || node.kind == reflect.Array) && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) {
+			for i := 0; i < v.Len(); i++ {
+				rows = appendElementRows(rows, node.element, path+"."+strconv.Itoa(i), v.Index(i), true, snapshot, opts, env, tag)
+			}
+		}
+		return rows
+	}
+	if node.kind != reflect.Struct {
+		return rows
+	}
+	desc := describeSchema(nil, tag, node.fields)
+	for _, field := range desc.fields {
+		var item schemaField
+		for i := range node.fields {
+			candidate := &node.fields[i]
+			if candidate.path == field.Path {
+				item = *candidate
+				break
+			}
+		}
+		localPath := field.Path
+		field.Path = path + "." + localPath
+		if item.sensitive {
+			field.Default = inspectionRedacted
+		}
+		row := InspectionField{Field: field, Env: env(field.Path)}
+		if values {
+			if item.sensitive {
+				row.Value = inspectionRedacted
+			} else {
+				fv := projectionField(v, &item)
+				if fv.IsValid() {
+					if item.element != nil {
+						row.Value = projectCollection(item.element, fv)
+					} else if fv.CanInterface() {
+						row.Value = fv.Interface()
+					}
+				}
+			}
+			origin := inspectionOrigin(snapshot.Origins[field.Path], snapshot.Files, row.Env, opts.OverrideLabel)
+			row.Origin = &origin
+		}
+		rows = append(rows, row)
+		if item.element != nil && (!item.sensitive || !values) {
+			rows = appendElementRows(rows, item.element, field.Path, projectionField(v, &item), values, snapshot, opts, env, tag)
+		}
+	}
+	return rows
+}
+
+func collectionOrigin(path string, origin ValueOrigin, origins map[string]ValueOrigin) ValueOrigin {
+	for key, current := range origins {
+		if strings.HasPrefix(key, path+".") && current != origin {
+			return ValueOrigin{}
+		}
+	}
+	return origin
 }

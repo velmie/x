@@ -12,6 +12,7 @@ type schemaField struct {
 	index     []int
 	sensitive bool
 	container bool
+	element   *schemaNode
 }
 
 type schemaPath struct {
@@ -21,6 +22,23 @@ type schemaPath struct {
 
 // walkSchema is the common source of configuration paths and reflection indexes.
 func walkSchema(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
+	fields, err := walkSchemaFields(t, prefix, tagName)
+	if err != nil {
+		return nil, err
+	}
+	for i := range fields {
+		if fields[i].container {
+			continue
+		}
+		fields[i].element, err = collectionSchema(fields[i].field.Type, tagName, fields[i].sensitive)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fields, nil
+}
+
+func walkSchemaFields(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 	var fields []schemaField
 	seen := make(map[string]schemaPath)
 	var walk func(reflect.Type, string, string, []int, bool) error
@@ -154,4 +172,53 @@ func schemaDefaults(fields []schemaField) map[string]any {
 		}
 	}
 	return defaults
+}
+
+// schemaNode represents a collection or the fields of a structured element.
+type schemaNode struct {
+	kind    reflect.Kind
+	fields  []schemaField
+	element *schemaNode
+}
+
+func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, error) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	node := &schemaNode{kind: t.Kind()}
+	switch t.Kind() {
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			return nil, nil
+		}
+		fallthrough
+	case reflect.Slice, reflect.Array:
+		child, err := collectionSchema(t.Elem(), tag, sensitive)
+		if err != nil {
+			return nil, err
+		}
+		node.element = child
+	case reflect.Struct:
+		if t.PkgPath() == netURLPkg {
+			return nil, nil
+		}
+		fields, err := walkSchemaFields(t, "", tag)
+		if err != nil {
+			return nil, err
+		}
+		for i := range fields {
+			fields[i].sensitive = fields[i].sensitive || sensitive
+			if !fields[i].container {
+				child, err := collectionSchema(fields[i].field.Type, tag, fields[i].sensitive)
+				if err != nil {
+					return nil, err
+				}
+				fields[i].element = child
+			}
+		}
+		node.fields = fields
+	default:
+		return nil, nil
+	}
+	return node, nil
 }

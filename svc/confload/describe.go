@@ -35,10 +35,16 @@ func (d FieldDescriptor) EnvName(prefix string) string {
 }
 
 // FieldCollection aggregates configuration field descriptors for a struct tree.
+type collectionSchemaInfo struct {
+	fields  []schemaField
+	tagName string
+}
+
 type FieldCollection struct {
 	fields   []FieldDescriptor
 	index    map[string]int
 	rootType reflect.Type
+	schema   *collectionSchemaInfo
 }
 
 // Fields returns a copy of the collected descriptors ordered by their dotted paths.
@@ -99,6 +105,41 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 	if err != nil {
 		return FieldCollection{}, err
 	}
+	return describeSchema(typeOf, tagName, schema), nil
+}
+
+// Element returns the schema of the struct element of a declared map or slice.
+// Paths and indexes are relative to the element, and inherited sensitivity is retained.
+// It returns false if the path is unknown or its element is not a struct.
+// No configuration sources are read.
+func (c FieldCollection) Element(path string) (FieldCollection, bool) {
+	for i := range c.schema.fields {
+		field := &c.schema.fields[i]
+		if field.path != path || field.element == nil {
+			continue
+		}
+		n := field.element
+		if n.kind != reflect.Map && n.kind != reflect.Slice && n.kind != reflect.Array {
+			return FieldCollection{}, false
+		}
+		n = n.element
+		if n == nil || n.kind != reflect.Struct {
+			return FieldCollection{}, false
+		}
+		t := field.field.Type
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		t = t.Elem()
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		return describeSchema(t, c.schema.tagName, n.fields), true
+	}
+	return FieldCollection{}, false
+}
+
+func describeSchema(typeOf reflect.Type, tagName string, schema []schemaField) FieldCollection {
 	defaults := schemaDefaults(schema)
 	fields := make([]FieldDescriptor, 0, len(schema))
 	for i := range schema {
@@ -143,7 +184,8 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 		fields:   fields,
 		index:    index,
 		rootType: typeOf,
-	}, nil
+		schema:   &collectionSchemaInfo{fields: schema, tagName: tagName},
+	}
 }
 
 func hasValidateRequired(tag string) bool {
