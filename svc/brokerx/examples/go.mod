@@ -7,10 +7,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.0
 	github.com/nats-io/nats.go v1.54.0
 	github.com/nats-io/nuid v1.0.1
-	github.com/velmie/broker v1.3.0-rc.5
+	github.com/velmie/broker v1.3.0
 	github.com/velmie/broker/azuresb v1.1.0
 	github.com/velmie/broker/sqs v1.1.0
-	github.com/velmie/x/svc/brokerx v0.1.0-rc.5
+	github.com/velmie/x/svc/brokerx v0.1.0
 )
 
 require (
@@ -80,11 +80,11 @@ require (
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/velmie/broker/natsjs/v4 v4.0.0-rc.1
+	github.com/velmie/broker/natsjs/v4 v4.0.0
 	github.com/velmie/x/bootstrap v0.5.0 // indirect
 	github.com/velmie/x/sqltx v1.3.0 // indirect
 	github.com/velmie/x/svc/apperror v0.1.0 // indirect
-	github.com/velmie/x/svc/transaction v0.1.0-rc.2 // indirect
+	github.com/velmie/x/svc/transaction v0.1.0 // indirect
 	github.com/velmie/x/svc/validation v0.3.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
