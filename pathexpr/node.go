@@ -15,6 +15,7 @@ type field struct {
 	key   string
 	value node
 	pos   Position
+	omit  omission
 }
 type step struct {
 	key     string
@@ -23,3 +24,11 @@ type step struct {
 	pos     Position
 	prefix  string
 }
+
+type omission uint8
+
+const (
+	omitNone omission = iota
+	omitMissing
+	omitEmpty
+)

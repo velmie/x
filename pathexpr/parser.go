@@ -208,6 +208,14 @@ func (p *parser) object() (node, error) {
 				pos:   pos,
 			})
 		}
+		if p.take('?') {
+			last := &result.fields[len(result.fields)-1]
+			last.omit = omitMissing
+			if p.i < len(p.s) && p.s[p.i] == '?' {
+				p.i++
+				last.omit = omitEmpty
+			}
+		}
 		if seen[key] {
 			p.i = start
 			return nil, p.fail("duplicate output key")

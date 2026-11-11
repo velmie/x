@@ -1,6 +1,7 @@
 package pathexpr
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
@@ -8,14 +9,18 @@ import (
 func (n literalNode) eval(_ any) (any, error) { return n.value, nil }
 func (n pathNode) eval(root any) (any, error) {
 	current := root
-	for _, s := range n.steps {
+	for i, s := range n.steps {
+		at := "."
+		if i > 0 {
+			at = n.steps[i-1].prefix
+		}
 		v := reflect.ValueOf(current)
 		if s.indexed {
 			if !v.IsValid() || v.Kind() != reflect.Slice {
 				return nil, &EvalError{
 					Op:   "get",
 					Path: n.text,
-					At:   s.prefix,
+					At:   at,
 					Pos:  s.pos,
 					Err: &TypeError{
 						Want: "slice",
@@ -39,7 +44,7 @@ func (n pathNode) eval(root any) (any, error) {
 			return nil, &EvalError{
 				Op:   "get",
 				Path: n.text,
-				At:   s.prefix,
+				At:   at,
 				Pos:  s.pos,
 				Err: &TypeError{
 					Want: "string-keyed map",
@@ -67,7 +72,13 @@ func (n objectNode) eval(root any) (any, error) {
 	for _, f := range n.fields {
 		value, err := f.value.eval(root)
 		if err != nil {
+			if f.omit != omitNone && errors.Is(err, ErrNotFound) {
+				continue
+			}
 			return nil, fmt.Errorf("field %q: %w", f.key, err)
+		}
+		if f.omit == omitEmpty && isEmpty(value) {
+			continue
 		}
 		result[f.key] = value
 	}
