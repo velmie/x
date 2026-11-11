@@ -79,7 +79,9 @@ func (p Path) Set(root any, value any) error {
 			current = container.Index(int(s.index)).Interface()
 			continue
 		}
-		if !container.IsValid() || container.Kind() != reflect.Map || container.Type().Key().Kind() != reflect.String || container.Type().Elem().Kind() != reflect.Interface || container.IsNil() {
+		if !container.IsValid() || container.Kind() != reflect.Map ||
+			container.Type().Key().Kind() != reflect.String ||
+			container.Type().Elem().Kind() != reflect.Interface || container.IsNil() {
 			return p.setError(s, at, &TypeError{
 				Want: "non-nil string-keyed map with interface elements",
 				Got:  reflect.TypeOf(current),

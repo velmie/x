@@ -12,3 +12,4 @@ The repository contains common packages used in Velmie projects.
 - [EnvX](./envx) - provides fluent API for retrieving and validating environment variables
 - [ipX](./ipx) - provides functionality to obtain the real IP address
 - [SlogX](./svc/slogx) - provides attribute redaction for log/slog handlers
+- [PathExpr](./pathexpr) - compiles paths and expressions for selecting and constructing values

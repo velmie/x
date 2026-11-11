@@ -1,6 +1,7 @@
 package pathexpr_test
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/velmie/x/pathexpr"
@@ -48,4 +49,20 @@ func ExampleCompilePath() {
 	}
 	fmt.Println(value)
 	// Output: Alex
+}
+
+func ExampleExpr_Eval_diagnostics() {
+	expr, err := pathexpr.Compile("{name: user.name}")
+	if err != nil {
+		panic(err)
+	}
+	_, err = expr.Eval(map[string]any{"user": map[string]any{}})
+	fmt.Println(errors.Is(err, pathexpr.ErrNotFound))
+	var detail *pathexpr.EvalError
+	if errors.As(err, &detail) {
+		fmt.Println(detail.Path, detail.At)
+	}
+	// Output:
+	// true
+	// user.name user.name
 }

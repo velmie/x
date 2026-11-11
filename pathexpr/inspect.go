@@ -2,10 +2,14 @@ package pathexpr
 
 // Info describes all syntax in an expression, including fields that may be omitted.
 type Info struct {
+	// IsObject reports whether the root constructs an object.
 	IsObject bool
-	Paths    []string
-	Keys     []string
-	Depth    int
+	// Paths lists all canonical path occurrences in source order.
+	Paths []string
+	// Keys lists all output-key occurrences in source order.
+	Keys []string
+	// Depth is the maximum number of nested object constructors.
+	Depth int
 }
 
 // Inspect returns caller-owned information in source order. Paths and Keys
