@@ -19,6 +19,20 @@ type squashConfig struct {
 	} `k:"events"`
 }
 
+type hiddenConnection struct {
+	URL string `k:"url"`
+}
+
+func TestSquashRejectsUnexportedEmbeddedField(t *testing.T) {
+	type config struct {
+		hiddenConnection `k:",squash"`
+	}
+	_, err := DescribeStruct[config]()
+	require.ErrorContains(t, err, "squash on hiddenConnection")
+	_, err = LoadInto[config](New())
+	require.ErrorContains(t, err, "squash on hiddenConnection")
+}
+
 func TestSquashedConfiguration(t *testing.T) {
 	t.Setenv("APP_BROKER_URL", "nats://environment")
 	loader := New(

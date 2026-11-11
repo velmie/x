@@ -382,7 +382,8 @@ func (l *Loader) unmarshal(prefix string, target any) error {
 	if l.opts.Strict {
 		allowedKeys = make(map[string]struct{})
 	}
-	for _, field := range fields {
+	for i := range fields {
+		field := &fields[i]
 		if field.container {
 			continue
 		}
@@ -584,7 +585,7 @@ func loadFile(k *koanf.Koanf, path string, origins map[string]ValueOrigin, optio
 	}
 
 	cleanPath := filepath.Clean(path)
-	info, statErr := os.Stat(cleanPath)
+	info, statErr := os.Stat(cleanPath) //nolint:gosec // The application operator selects configuration file paths.
 	if statErr != nil {
 		if optional && os.IsNotExist(statErr) {
 			return false, nil

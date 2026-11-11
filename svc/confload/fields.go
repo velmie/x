@@ -36,9 +36,6 @@ func walkSchema(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 		}
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-			if !f.IsExported() {
-				continue
-			}
 			raw := strings.TrimSpace(f.Tag.Get(tagName))
 			if raw == "" || raw == "-" {
 				continue
@@ -55,8 +52,11 @@ func walkSchema(t reflect.Type, prefix, tagName string) ([]schemaField, error) {
 			if goPath != "" {
 				goName = goPath + "." + goName
 			}
-			if squash && (!f.Anonymous || f.Type.Kind() != reflect.Struct || name != "") {
-				return fmt.Errorf("confload: squash on %s requires an embedded struct value with an empty name", goName)
+			if squash && (!f.IsExported() || !f.Anonymous || f.Type.Kind() != reflect.Struct || name != "") {
+				return fmt.Errorf("confload: squash on %s requires an exported embedded struct value with an empty name", goName)
+			}
+			if !f.IsExported() {
+				continue
 			}
 			if !squash && name == "" {
 				continue
@@ -125,7 +125,8 @@ func checkSchemaCollision(
 
 func schemaDefaults(fields []schemaField) map[string]any {
 	defaults := make(map[string]any)
-	for _, item := range fields {
+	for i := range fields {
+		item := &fields[i]
 		if item.container {
 			continue
 		}

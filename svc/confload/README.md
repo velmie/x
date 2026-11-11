@@ -77,6 +77,13 @@ are not included in these errors.
 go get github.com/velmie/x/svc/confload
 ```
 
+## Migrating from v0.3.0
+
+Tag options are no longer part of configuration paths: `k:"name,omitempty"`
+describes `name`. Tagged unexported fields are no longer described. Duplicate
+paths and leaf/container conflicts now cause `DescribeStruct` and the `Load*`
+functions to fail. Rename conflicting paths before upgrading.
+
 ## Quick start
 
 ```go

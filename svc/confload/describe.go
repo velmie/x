@@ -28,6 +28,8 @@ type FieldDescriptor struct {
 }
 
 // EnvName renders the environment variable name for the descriptor using the provided prefix.
+//
+//nolint:gocritic // Keep the published value receiver.
 func (d FieldDescriptor) EnvName(prefix string) string {
 	return EnvName(prefix, d.Path)
 }
@@ -74,7 +76,9 @@ func (c FieldCollection) EnvMap(prefix string) map[string]string {
 	return out
 }
 
-// DescribeStruct enumerates the configuration fields declared on the provided struct type using the default tag name.
+// DescribeStruct enumerates exported configuration fields using the default tag.
+// Tag options are omitted from paths. Duplicate paths, leaf/container conflicts,
+// and invalid squash declarations cause an error.
 func DescribeStruct[T any]() (FieldCollection, error) {
 	return DescribeStructWithTag[T](defaultTagName)
 }
@@ -97,7 +101,8 @@ func DescribeStructWithTag[T any](tagName string) (FieldCollection, error) {
 	}
 	defaults := schemaDefaults(schema)
 	fields := make([]FieldDescriptor, 0, len(schema))
-	for _, item := range schema {
+	for i := range schema {
+		item := &schema[i]
 		if item.container {
 			continue
 		}
@@ -247,7 +252,7 @@ var knownTagKeys = map[string]struct{}{
 	"default_sep": {},
 	"validate":    {},
 	"hint":        {},
-	"json":        {},
+	"json":        {}, //nolint:goconst // Struct tags and output formats are independent vocabularies.
 	"yaml":        {},
 }
 

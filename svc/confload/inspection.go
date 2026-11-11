@@ -124,7 +124,7 @@ func inspect(
 			if sensitive {
 				row.Value = inspectionRedacted
 			} else {
-				value, err := inspectionValue(root, field)
+				value, err := inspectionValue(root, &field)
 				if err != nil {
 					return nil, err
 				}
@@ -145,7 +145,8 @@ func inspect(
 func WriteInspection(w io.Writer, format string, fields []InspectionField) error {
 	switch format {
 	case "", "text":
-		for _, field := range fields {
+		for i := range fields {
+			field := &fields[i]
 			defaultValue, err := json.Marshal(field.Field.Default)
 			if err != nil {
 				return fmt.Errorf("format inspection default: %w", err)
@@ -184,9 +185,10 @@ func WriteInspection(w io.Writer, format string, fields []InspectionField) error
 			}
 		}
 		return nil
-	case "json":
+	case "json": //nolint:goconst // Output formats and struct tags are independent vocabularies.
 		rows := make([]inspectionJSONField, 0, len(fields))
-		for _, field := range fields {
+		for i := range fields {
+			field := fields[i]
 			row := inspectionJSONField{
 				Name:       field.Field.Path,
 				Type:       field.Field.Type.String(),
@@ -261,7 +263,7 @@ func typeContainsSensitive(t reflect.Type, visited map[reflect.Type]bool) bool {
 	return false
 }
 
-func inspectionValue(root reflect.Value, field FieldDescriptor) (any, error) {
+func inspectionValue(root reflect.Value, field *FieldDescriptor) (any, error) {
 	value := root
 	for _, index := range field.Index {
 		for value.Kind() == reflect.Pointer {

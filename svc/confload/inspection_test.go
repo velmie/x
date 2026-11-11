@@ -389,7 +389,7 @@ func TestURLConversionRetainsNativeCause(t *testing.T) {
 	type config struct {
 		Endpoint *url.URL `k:"endpoint"`
 	}
-	overrides := map[string]any{
+	overrides := map[string]any{ //nolint:gosec // Reserved example hostname and synthetic credentials test redaction.
 		"endpoint": "https://example-user:example-secret@example.invalid/%zz",
 	}
 	loader := New(WithOverrides(overrides))
