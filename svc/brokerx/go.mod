@@ -4,11 +4,11 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/velmie/broker v1.3.0-rc.5
+	github.com/velmie/broker v1.3.0
 	github.com/velmie/x/bootstrap v0.5.0
 	github.com/velmie/x/sqltx v1.3.0
 	github.com/velmie/x/svc/apperror v0.1.0
-	github.com/velmie/x/svc/transaction v0.1.0-rc.2
+	github.com/velmie/x/svc/transaction v0.1.0
 	github.com/velmie/x/svc/validation v0.3.0
 )
 
