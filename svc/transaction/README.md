@@ -6,12 +6,13 @@ error as cooperative cancellation only when every cause is an allowed leaf.
 
 ```go
 err, panicked := transaction.NormalizePanic(err)
-if ctx.Err() != nil && !panicked && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded) {
-    return ctx.Err()
+if ctxErr := ctx.Err(); ctxErr != nil && !panicked && transaction.OnlyCancellation(err, ctxErr) {
+    return ctxErr
 }
 return err
 ```
 
-Pass leaf sentinels such as `context.Canceled` or `ctx.Err()` to
-`OnlyCancellation`. A wrapped error cannot match itself as an allowed value:
-the function examines its underlying causes.
+For a delivery context, pass its current error to `OnlyCancellation`. An
+independent deadline or cancellation remains a failure when it does not match
+the delivery context's error. The function examines underlying causes, so a
+wrapped error cannot match itself as an allowed value.
