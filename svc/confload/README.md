@@ -503,3 +503,24 @@ If a present variable maps to more than one path involving a collection element,
 loading returns a collision error. Use `WithEnvAliases` to give the paths distinct
 names. The default naming function retains dashes. A custom naming function can
 replace them when an environment requires portable names.
+
+### Collection behavior
+
+Strict loading validates fields of every structured map or slice element before
+decoding. Map entry names remain unrestricted. Maps with scalar values accept
+arbitrary entry names, and `map[string]any` has no declared descendant schema.
+Unknown fields are returned in `UnknownKeysError` with their concrete paths and
+available source origins. Malformed values still produce decoding errors.
+
+Tag defaults fill absent fields of existing elements after sources are merged.
+A present zero, `false`, empty string, empty collection, or `null` suppresses
+the default. Defaults do not create map entries or append slice elements.
+Programmatic struct fields are present even when they have zero values.
+
+Inspection keeps the aggregate collection row and adds rows for structured
+elements. Aggregate values and defaults use configuration tag names, omit
+untagged fields, and redact sensitive members before rendering. A sensitive
+collection is masked as a whole. Concrete element rows identify the applicable
+source when known. Aggregate rows with mixed sources report an unknown source.
+These behaviors provide more detailed inspection and stricter validation than
+older versions, which treated collection elements as opaque.
