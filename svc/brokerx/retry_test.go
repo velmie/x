@@ -112,10 +112,10 @@ func TestRetryErrors(t *testing.T) {
 			want:   "cancel",
 		},
 		{
-			name:   "joined cancellation",
+			name:   "joined cancellation and independent deadline",
 			cause:  errors.Join(context.Canceled, context.DeadlineExceeded),
 			cancel: true,
-			want:   "cancel",
+			want:   "joined",
 		},
 		{
 			name:   "rollback failure",

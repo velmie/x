@@ -82,7 +82,7 @@ func PolicyLogConfig(policy ErrorPolicy) broker.ProcessingLogConfig {
 				return slog.LevelInfo
 			}
 			if retry, ok := result.(broker.RetryAfter); ok && err == nil && retry.Cause != nil &&
-				policy.Retryable != nil && policy.Retryable(retry.Cause) {
+				!unexpectedFailure(retry.Cause) && policy.Retryable != nil && policy.Retryable(retry.Cause) {
 				return slog.LevelWarn
 			}
 			return slog.LevelError
@@ -182,17 +182,15 @@ func wrapErrors(delay time.Duration, retryable func(error) bool, rejectTerminal 
 	return func(next broker.HandlerFunc) broker.HandlerFunc {
 		return func(ctx context.Context, delivery broker.Delivery) (broker.Disposition, error) {
 			result, err := next(ctx, delivery)
-			var txPanic bool
 			if err != nil {
-				err, txPanic = transaction.NormalizePanic(err)
+				err, _ = transaction.NormalizePanic(err)
 			}
-			var handlerPanic *broker.PanicError
-			failure := txPanic || errors.As(err, &handlerPanic) || errors.Is(err, sqltx.ErrCommit)
-			if ctx.Err() != nil {
-				if err == nil || (!failure && transaction.OnlyCancellation(err, context.Canceled, context.DeadlineExceeded)) {
-					return nil, ctx.Err()
+			failure := unexpectedFailure(err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if err == nil || (!failure && transaction.OnlyCancellation(err, ctxErr)) {
+					return nil, ctxErr
 				}
-				return nil, errors.Join(err, ctx.Err())
+				return nil, errors.Join(err, ctxErr)
 			}
 			if err == nil {
 				return result, nil
@@ -208,4 +206,10 @@ func wrapErrors(delay time.Duration, retryable func(error) bool, rejectTerminal 
 			}, nil
 		}
 	}
+}
+
+func unexpectedFailure(err error) bool {
+	var handlerPanic *broker.PanicError
+	var txPanic *sqltx.PanicError
+	return errors.As(err, &handlerPanic) || errors.As(err, &txPanic) || errors.Is(err, sqltx.ErrCommit)
 }
