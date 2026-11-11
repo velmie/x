@@ -132,7 +132,9 @@ func WithEnvPrefix(prefix string) Option {
 // WithSectionEnvPrefix assigns an environment prefix to a dotted section.
 // Calls accumulate, the longest matching section wins, and explicit aliases take
 // precedence. An empty section or prefix is ignored, as with WithEnvPrefix.
-// A custom EnvKeyFunc receives the section prefix and the relative path.
+// A custom EnvKeyFunc receives the section prefix and the relative path. The
+// section itself, such as a whole collection, is named by the prefix without
+// its trailing underscore.
 func WithSectionEnvPrefix(section, prefix string) Option {
 	return func(o *options) {
 		section = strings.TrimSpace(section)
@@ -795,6 +797,9 @@ func envNameForKey(opts *options, dotted string) string {
 	}
 	if opts.EnvKeyFunc != nil {
 		return strings.TrimSpace(opts.EnvKeyFunc(prefix, relative))
+	}
+	if relative == "" {
+		return strings.TrimSuffix(prefix, "_")
 	}
 	return envName(prefix, relative)
 }

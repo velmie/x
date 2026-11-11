@@ -21,7 +21,8 @@ const (
 // InspectOptions supplies presentation choices owned by the application.
 type InspectOptions struct {
 	// EnvName resolves the declared environment name. Nil uses the unprefixed
-	// default; a loader's EnvName method also applies its prefix and aliases.
+	// default; a loader's EnvName method also applies its prefix, section
+	// prefixes and aliases.
 	EnvName func(path string) string
 	// OverrideLabel names an override source. Empty selects "override".
 	OverrideLabel string

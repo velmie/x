@@ -34,7 +34,7 @@ func TestSectionEnvPrefix(t *testing.T) {
 	require.Equal(t, "alias", cfg.Telemetry.Name)
 	require.Equal(t, "other", cfg.Other.Name)
 	require.Equal(t, "OTELX_HEADERS_TOKEN", loader.EnvName("telemetry.headers.token"))
-	require.Equal(t, "OTELX_", loader.EnvName("telemetry"))
+	require.Equal(t, "OTELX", loader.EnvName("telemetry"))
 	require.Equal(t, "APP_TELEMETRYS_NAME", loader.EnvName("telemetrys.name"))
 }
 
@@ -51,7 +51,11 @@ func TestSectionEnvPrefixWholeMapAndLongest(t *testing.T) {
 	cfg, err := LoadInto[config](loader)
 	require.NoError(t, err)
 	require.Equal(t, "whole", cfg.Telemetry.Headers["token"])
-	nested := New(WithSectionEnvPrefix("telemetry", "OTELX"), WithSectionEnvPrefix("telemetry.headers", "HEADER"), WithEnvKeyFunc(func(prefix, path string) string { return prefix + strings.ToUpper(strings.ReplaceAll(path, ".", "__")) }))
+	nested := New(
+		WithSectionEnvPrefix("telemetry", "OTELX"),
+		WithSectionEnvPrefix("telemetry.headers", "HEADER"),
+		WithEnvKeyFunc(func(prefix, path string) string { return prefix + strings.ToUpper(strings.ReplaceAll(path, ".", "__")) }),
+	)
 	require.Equal(t, "HEADER_TOKEN", nested.EnvName("telemetry.headers.token"))
 	require.Equal(t, "OTELX_NAME", nested.EnvName("telemetry.name"))
 }
