@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/v2"
 )
 
@@ -136,11 +135,7 @@ func strictCollection(
 			if v.Type() == node.typ {
 				return
 			}
-			var converted map[string]any
-			decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &converted, TagName: tag})
-			if err == nil {
-				err = decoder.Decode(v.Interface())
-			}
+			converted, err := configurationStructMap(v, tag, node.fields)
 			if err != nil {
 				state.err = fmt.Errorf("validate structured configuration at %s: %w", display, err)
 				return

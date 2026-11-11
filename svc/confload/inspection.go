@@ -422,7 +422,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 				continue
 			}
 			if field.container {
-				fv := projectionField(v, field)
+				fv := schemaFieldValue(v, field)
 				if field.sensitive {
 					setProjected(out, field.path, inspectionRedacted)
 					skipped = append(skipped, field.path)
@@ -438,7 +438,7 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 			if field.sensitive {
 				value = inspectionRedacted
 			} else {
-				fv := projectionField(v, field)
+				fv := schemaFieldValue(v, field)
 				if fv.IsValid() {
 					if field.element != nil {
 						value = projectCollection(field.element, fv)
@@ -452,37 +452,6 @@ func projectCollection(node *schemaNode, v reflect.Value) any {
 		return out
 	}
 	return v.Interface()
-}
-
-func projectionField(v reflect.Value, field *schemaField) reflect.Value {
-	if v.Kind() == reflect.Struct {
-		for _, i := range field.index {
-			for v.IsValid() && v.Kind() == reflect.Pointer {
-				if v.IsNil() {
-					return reflect.Value{}
-				}
-				v = v.Elem()
-			}
-			if !v.IsValid() || v.Kind() != reflect.Struct {
-				return reflect.Value{}
-			}
-			v = v.Field(i)
-		}
-		return v
-	}
-	for _, part := range strings.Split(field.path, ".") {
-		for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
-			if v.IsNil() {
-				return reflect.Value{}
-			}
-			v = v.Elem()
-		}
-		if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
-			return reflect.Value{}
-		}
-		v = v.MapIndex(reflect.ValueOf(part).Convert(v.Type().Key()))
-	}
-	return v
 }
 
 func setProjected(out map[string]any, path string, value any) {
@@ -567,7 +536,7 @@ func appendElementRows(
 			if item.sensitive {
 				row.Value = inspectionRedacted
 			} else {
-				fv := projectionField(v, &item)
+				fv := schemaFieldValue(v, &item)
 				if fv.IsValid() {
 					if item.element != nil {
 						row.Value = projectCollection(item.element, fv)
@@ -581,7 +550,7 @@ func appendElementRows(
 		}
 		rows = append(rows, row)
 		if item.element != nil && (!item.sensitive || !values) {
-			rows = appendElementRows(rows, item.element, field.Path, projectionField(v, &item), values, snapshot, opts, env, tag)
+			rows = appendElementRows(rows, item.element, field.Path, schemaFieldValue(v, &item), values, snapshot, opts, env, tag)
 		}
 	}
 	return rows

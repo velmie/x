@@ -470,6 +470,11 @@ func (l *Loader) snapshot(
 		recordTreeOrigins(reflect.ValueOf(value), key, ValueOrigin{Source: SourceOverride}, boundaryOrigins)
 	}
 
+	k, err = applyCollectionDefaults(k, fields, origins, boundaryOrigins)
+	if err != nil {
+		return nil, err
+	}
+
 	if l.opts.Strict {
 		if err := validateStrict(k, origins, boundaryOrigins, fields, prefix, normalizeTagName(l.opts.TagName)); err != nil {
 			return nil, err

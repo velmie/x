@@ -3,7 +3,18 @@ package confload
 import (
 	"fmt"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/knadh/koanf/providers/confmap"
+	"github.com/knadh/koanf/v2"
+)
+
+const (
+	omitEmptyOption = "omitempty"
+	omitZeroOption  = "omitzero"
 )
 
 type schemaField struct {
@@ -178,6 +189,7 @@ func schemaDefaults(fields []schemaField) map[string]any {
 type schemaNode struct {
 	kind    reflect.Kind
 	typ     reflect.Type
+	tag     string
 	fields  []schemaField
 	element *schemaNode
 }
@@ -186,7 +198,7 @@ func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, 
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	node := &schemaNode{kind: t.Kind(), typ: t}
+	node := &schemaNode{kind: t.Kind(), typ: t, tag: tag}
 	switch t.Kind() {
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
@@ -222,4 +234,349 @@ func collectionSchema(t reflect.Type, tag string, sensitive bool) (*schemaNode, 
 		return nil, nil
 	}
 	return node, nil
+}
+
+func applyCollectionDefaults(
+	k *koanf.Koanf,
+	fields []schemaField,
+	origins map[string]ValueOrigin,
+	boundaryOrigins map[string]ValueOrigin,
+) (*koanf.Koanf, error) {
+	hasCollections := false
+	for i := range fields {
+		if fields[i].element != nil {
+			hasCollections = true
+			break
+		}
+	}
+	if !hasCollections {
+		return k, nil
+	}
+	raw := normalizeObject(reflect.ValueOf(k.Raw()))
+	changed := false
+	for i := range fields {
+		field := &fields[i]
+		if field.element == nil {
+			continue
+		}
+		value, updated, err := applyNodeDefaults(
+			schemaValue(reflect.ValueOf(raw), field.path),
+			field.element,
+			field.path,
+			origins,
+			boundaryOrigins,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if updated {
+			setSchemaValue(raw, field.path, value)
+			changed = true
+		}
+	}
+	if !changed {
+		return k, nil
+	}
+	updated := koanf.New(".")
+	if err := updated.Load(confmap.Provider(raw, ""), nil); err != nil {
+		return nil, fmt.Errorf("apply element defaults: %w", err)
+	}
+	return updated, nil
+}
+
+func applyNodeDefaults(
+	v reflect.Value,
+	node *schemaNode,
+	path string,
+	origins, boundaryOrigins map[string]ValueOrigin,
+) (result any, updated bool, resultErr error) {
+	v = indirectValue(v)
+	if !v.IsValid() {
+		return nil, false, nil
+	}
+	changed := false
+	switch node.kind {
+	case reflect.Map:
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || v.IsNil() || node.element == nil {
+			return nil, false, nil
+		}
+		out := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key().String()
+			current := iter.Value()
+			value, updated, err := applyNodeDefaults(current, node.element, configurationPath(path, key), origins, boundaryOrigins)
+			if err != nil {
+				return nil, false, err
+			}
+			if updated {
+				out[key] = value
+				changed = true
+			} else {
+				out[key] = current.Interface()
+			}
+		}
+		return out, changed, nil
+	case reflect.Slice, reflect.Array:
+		if (v.Kind() != reflect.Slice && v.Kind() != reflect.Array) || node.element == nil {
+			return nil, false, nil
+		}
+		out := make([]any, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			value, updated, err := applyNodeDefaults(v.Index(i), node.element, path+"."+strconv.Itoa(i), origins, boundaryOrigins)
+			if err != nil {
+				return nil, false, err
+			}
+			if updated {
+				out[i] = value
+				changed = true
+			} else {
+				out[i] = v.Index(i).Interface()
+			}
+		}
+		return out, changed, nil
+	case reflect.Struct:
+		if v.Kind() == reflect.Struct {
+			if v.Type() == node.typ {
+				return nil, false, nil
+			}
+			converted, err := configurationStructMap(v, node.tag, node.fields)
+			if err != nil {
+				return nil, false, fmt.Errorf("apply element defaults at %s: %w", path, err)
+			}
+			v = reflect.ValueOf(converted)
+		}
+		if v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || v.IsNil() {
+			return nil, false, nil
+		}
+		object := normalizeObject(v)
+		objectValue := reflect.ValueOf(object)
+		for key, value := range schemaDefaults(node.fields) {
+			if !insertDefault(objectValue, strings.Split(key, "."), value) {
+				continue
+			}
+			full := path + "." + key
+			origin := ValueOrigin{Source: SourceStructDefault}
+			origins[full] = origin
+			boundaryOrigins[full] = origin
+			changed = true
+		}
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.element == nil {
+				continue
+			}
+			value, updated, err := applyNodeDefaults(
+				schemaValue(objectValue, field.path),
+				field.element,
+				path+"."+field.path,
+				origins,
+				boundaryOrigins,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			if updated {
+				setSchemaValue(object, field.path, value)
+				changed = true
+			}
+		}
+		return object, changed, nil
+	}
+	return nil, false, nil
+}
+
+func normalizeObject(v reflect.Value) map[string]any {
+	out := make(map[string]any, v.Len())
+	iter := v.MapRange()
+	for iter.Next() {
+		item := iter.Value()
+		value := indirectValue(item)
+		if value.IsValid() && value.Kind() == reflect.Map && value.Type().Key().Kind() == reflect.String && !value.IsNil() {
+			out[iter.Key().String()] = normalizeObject(value)
+		} else {
+			out[iter.Key().String()] = item.Interface()
+		}
+	}
+	return out
+}
+
+func setSchemaValue(object map[string]any, path string, value any) {
+	parts := strings.Split(path, ".")
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := object[part].(map[string]any)
+		if !ok {
+			return
+		}
+		object = next
+	}
+	object[parts[len(parts)-1]] = value
+}
+
+func configurationStructMap(v reflect.Value, tag string, target []schemaField) (map[string]any, error) {
+	var result map[string]any
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &result, TagName: tag})
+	if err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(v.Interface()); err != nil {
+		return nil, err
+	}
+	fields, err := walkSchemaFields(v.Type(), "", tag)
+	if err != nil {
+		return nil, err
+	}
+	for i := range fields {
+		field := &fields[i]
+		if field.container {
+			continue
+		}
+		options := strings.Split(field.field.Tag.Get(tag), ",")
+		omitted := false
+		for _, option := range options[1:] {
+			if option == omitEmptyOption || option == omitZeroOption {
+				omitted = true
+				break
+			}
+		}
+		if !omitted {
+			continue
+		}
+		value := schemaFieldValue(v, field)
+		if value.IsValid() && value.CanInterface() {
+			insertDefault(reflect.ValueOf(result), strings.Split(field.path, "."), value.Interface())
+		}
+	}
+
+	// An empty tag name still lets mapstructure use the Go field name.
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Type().Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		options := strings.Split(field.Tag.Get(tag), ",")
+		if len(options) < 2 || options[0] != "" {
+			continue
+		}
+		for _, option := range options[1:] {
+			if option == omitEmptyOption || option == omitZeroOption {
+				value := v.Field(i)
+				if value.CanInterface() {
+					insertDefault(reflect.ValueOf(result), []string{field.Name}, value.Interface())
+				}
+				break
+			}
+		}
+	}
+	result = normalizeObject(reflect.ValueOf(result))
+	for i := range target {
+		canonicalizeStructKeys(result, strings.Split(target[i].path, "."))
+	}
+	return result, nil
+}
+
+func canonicalizeStructKeys(object map[string]any, parts []string) {
+	value, ok := object[parts[0]]
+	if !ok {
+		names := make([]string, 0, len(object))
+		for name := range object {
+			if strings.EqualFold(name, parts[0]) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		if len(names) == 0 {
+			return
+		}
+		value = object[names[0]]
+		delete(object, names[0])
+		object[parts[0]] = value
+	}
+	if len(parts) > 1 {
+		if child, ok := value.(map[string]any); ok {
+			canonicalizeStructKeys(child, parts[1:])
+		}
+	}
+}
+
+func schemaValue(v reflect.Value, path string) reflect.Value {
+	for _, part := range strings.Split(path, ".") {
+		v = indirectValue(v)
+		if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+			return reflect.Value{}
+		}
+		v = v.MapIndex(reflect.ValueOf(part).Convert(v.Type().Key()))
+	}
+	return v
+}
+
+//nolint:gosec // Callers split nonempty schema paths; recursion stops at the last component.
+func insertDefault(v reflect.Value, parts []string, value any) bool {
+	v = indirectValue(v)
+	if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String || v.IsNil() {
+		return false
+	}
+	key := reflect.ValueOf(parts[0]).Convert(v.Type().Key())
+	current := v.MapIndex(key)
+	if !current.IsValid() {
+		iter := v.MapRange()
+		for iter.Next() {
+			if strings.EqualFold(iter.Key().String(), parts[0]) {
+				key = iter.Key()
+				current = iter.Value()
+				break
+			}
+		}
+	}
+	if len(parts) == 1 {
+		if current.IsValid() {
+			return false
+		}
+		def := reflect.ValueOf(value)
+		if !def.IsValid() || !def.Type().AssignableTo(v.Type().Elem()) {
+			return false
+		}
+		v.SetMapIndex(key, def)
+		return true
+	}
+	if !current.IsValid() {
+		child := reflect.ValueOf(map[string]any{})
+		if !child.Type().AssignableTo(v.Type().Elem()) {
+			return false
+		}
+		v.SetMapIndex(key, child)
+		current = child
+	}
+	return insertDefault(current, parts[1:], value)
+}
+
+func schemaFieldValue(v reflect.Value, field *schemaField) reflect.Value {
+	if v.Kind() == reflect.Struct {
+		for _, i := range field.index {
+			for v.IsValid() && v.Kind() == reflect.Pointer {
+				if v.IsNil() {
+					return reflect.Value{}
+				}
+				v = v.Elem()
+			}
+			if !v.IsValid() || v.Kind() != reflect.Struct {
+				return reflect.Value{}
+			}
+			v = v.Field(i)
+		}
+		return v
+	}
+	for _, part := range strings.Split(field.path, ".") {
+		for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer) {
+			if v.IsNil() {
+				return reflect.Value{}
+			}
+			v = v.Elem()
+		}
+		if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
+			return reflect.Value{}
+		}
+		v = v.MapIndex(reflect.ValueOf(part).Convert(v.Type().Key()))
+	}
+	return v
 }
