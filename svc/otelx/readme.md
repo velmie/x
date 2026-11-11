@@ -34,6 +34,18 @@ and plaintext is allowed only for literal loopback addresses. `stdout` export
 requires a new output file. Prometheus uses a dedicated registry exposed via
 `Runtime.PrometheusHandler`.
 
+## Traffic class and durable trace context
+
+When `AllowBaggage` is enabled, the service profile accepts and emits only
+`traffic.class=interactive` or `traffic.class=batch`. Use
+`TrafficClassAttributes(ctx)` to add a permitted value to spans. Members with
+properties or other values are discarded.
+
+For durable records, store `Traceparent(ctx)` and restore it with
+`ParseTraceparent`, regardless of the peer propagation format. The value holds
+only W3C version-00 trace and span identity and the sampled flag. It does not
+contain baggage or vendor state.
+
 ## Native customization with Open
 
 Build `runtimeConfig` from service configuration, then open and stop the runtime:

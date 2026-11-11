@@ -224,8 +224,8 @@ func servicePropagation(cfg ServiceConfig) (*Propagation, error) {
 	if cfg.AllowBaggage {
 		policy.Baggage = []BaggageRule{
 			{
-				Key:    "traffic.class",
-				Values: []string{"interactive", "batch"},
+				Key:    TrafficClassKey,
+				Values: []string{TrafficClassInteractive, TrafficClassBatch},
 			},
 		}
 	}
