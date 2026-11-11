@@ -23,7 +23,13 @@ func TestInspectionReorderedDefaultsNeverExposeSecrets(t *testing.T) {
 	type config struct {
 		Endpoints map[string]endpoint `k:"endpoints"`
 	}
-	loader := New(WithDefaults(map[string]any{"endpoints": map[string]defaultsEndpoint{"one": {Password: "secret-canary", URL: "public-url"}}}))
+	defaults := map[string]any{
+		"endpoints": map[string]defaultsEndpoint{"one": {
+			Password: "secret-canary",
+			URL:      "public-url",
+		}},
+	}
+	loader := New(WithDefaults(defaults))
 	fields, err := DescribeStruct[config]()
 	require.NoError(t, err)
 	rows, err := loader.Inspect(fields, nil, Snapshot{}, InspectOptions{})
@@ -47,7 +53,12 @@ func TestLoadPartialCollectionStructWithoutTagDefaults(t *testing.T) {
 	type config struct {
 		Endpoints map[string]endpoint `k:"endpoints"`
 	}
-	cfg, snapshot, err := LoadIntoWithSnapshot[config](New(WithDefaults(map[string]any{"endpoints": map[string]partial{"one": {Name: "service"}}})))
+	defaults := map[string]any{
+		"endpoints": map[string]partial{"one": {
+			Name: "service",
+		}},
+	}
+	cfg, snapshot, err := LoadIntoWithSnapshot[config](New(WithDefaults(defaults)))
 	require.NoError(t, err)
 	require.Equal(t, "service", cfg.Endpoints["one"].Name)
 	require.Equal(t, SourceDefaults, snapshot.Origins["endpoints.one.name"].Source)
@@ -66,8 +77,17 @@ func TestInspectionMasksOpaqueSensitiveCollections(t *testing.T) {
 		Nested []map[int]endpoint `k:"nested"`
 		Groups []group            `k:"groups"`
 	}
-	values := map[int]endpoint{1: {URL: "public", Password: "secret-canary"}}
-	cfg := config{Opaque: values, Nested: []map[int]endpoint{values}, Groups: []group{{Opaque: values}}}
+	values := map[int]endpoint{1: {
+		URL:      "public",
+		Password: "secret-canary",
+	}}
+	cfg := config{
+		Opaque: values,
+		Nested: []map[int]endpoint{values},
+		Groups: []group{{
+			Opaque: values,
+		}},
+	}
 	fields, err := DescribeStruct[config]()
 	require.NoError(t, err)
 	loader := New(WithDefaults(map[string]any{"opaque": values, "nested": cfg.Nested, "groups": cfg.Groups}))
@@ -107,7 +127,13 @@ func TestInspectionMasksMismatchedSensitiveCollectionDefaults(t *testing.T) {
 	type config struct {
 		Routes []endpoint `k:"routes"`
 	}
-	loader := New(WithDefaults(map[string]any{"routes": map[string]endpoint{"one": {URL: "public", Password: "mismatch-secret"}}}))
+	defaults := map[string]any{
+		"routes": map[string]endpoint{"one": {
+			URL:      "public",
+			Password: "mismatch-secret",
+		}},
+	}
+	loader := New(WithDefaults(defaults))
 	fields, err := DescribeStruct[config]()
 	require.NoError(t, err)
 	rows, err := loader.Inspect(fields, nil, Snapshot{}, InspectOptions{})
@@ -131,7 +157,13 @@ func TestInspectionMasksMismatchedMapKeyDefaults(t *testing.T) {
 	type config struct {
 		Endpoints map[string]endpoint `k:"endpoints"`
 	}
-	loader := New(WithDefaults(map[string]any{"endpoints": map[int]reordered{1: {Password: "key-mismatch-canary", URL: "public"}}}))
+	defaults := map[string]any{
+		"endpoints": map[int]reordered{1: {
+			Password: "key-mismatch-canary",
+			URL:      "public",
+		}},
+	}
+	loader := New(WithDefaults(defaults))
 	fields, err := DescribeStruct[config]()
 	require.NoError(t, err)
 	rows, err := loader.Inspect(fields, nil, Snapshot{}, InspectOptions{})
