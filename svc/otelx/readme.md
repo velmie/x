@@ -31,7 +31,8 @@ return errors.Join(runErr, runtime.Shutdown(shutdownCtx))
 file. It does not install global providers. Collector HTTP error bodies and gRPC
 status messages are dropped because collectors may echo request headers. HTTP
 redirects are rejected without exposing their targets. Use the collector's own
-logs for those details. The zero configuration disables
+logs for those details. Partial-success messages in accepted responses are
+reported as the collector sends them. The zero configuration disables
 telemetry. When enabled, collector endpoints use `host:port`, TLS is verified,
 and plaintext is allowed only for literal loopback addresses. `stdout` export
 requires a new output file. Prometheus uses a dedicated registry exposed via
