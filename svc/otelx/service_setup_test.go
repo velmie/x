@@ -217,3 +217,34 @@ func TestServiceConfigConfloadInspectionAndValues(t *testing.T) {
 		t.Fatalf("schema inspection read configuration sources: %v", err)
 	}
 }
+
+func TestServiceSetupReleasesOutputAfterCAFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traces.json")
+	cfg := otelx.ServiceConfig{
+		Enabled:         true,
+		TraceProtocol:   "stdout",
+		StdoutFile:      path,
+		MetricsMode:     "otlp",
+		MetricsEndpoint: "127.0.0.1:4318",
+		CAFile:          filepath.Join(t.TempDir(), "missing.pem"),
+		Environment:     "test",
+	}
+	res := resource.NewSchemaless(attribute.String("service.name", "test"), attribute.String("service.version", "1"))
+	_, err := otelx.SetupService(t.Context(), cfg, res)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing CA cause lost: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("output was not acquired: %v", err)
+	}
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("file descriptor inspection is unavailable")
+	}
+	for _, entry := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
+		if err == nil && target == path {
+			t.Fatal("output remains open after setup failure")
+		}
+	}
+}
