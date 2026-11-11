@@ -46,6 +46,16 @@ For durable records, store `Traceparent(ctx)` and restore it with
 only W3C version-00 trace and span identity and the sampled flag. It does not
 contain baggage or vendor state.
 
+## Webhook egress
+
+A webhook client can retain the queued trace as a local parent while preventing
+trace propagation to the recipient. Use `otelhttpx.NewTransport` with
+`propagation.NewCompositeTextMapPropagator()` and construct a fresh request with
+fresh headers. A no-op propagator does not remove propagation headers already
+present on a request. Validate any user-configured headers at the application
+boundary. The runnable `ExampleNewTransport_webhookEgress` demonstrates the
+recipient and local span behavior.
+
 ## Native customization with Open
 
 Build `runtimeConfig` from service configuration, then open and stop the runtime:

@@ -3,6 +3,8 @@ package otelx_test
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/velmie/x/svc/otelx"
 	"go.opentelemetry.io/otel/attribute"
@@ -13,7 +15,23 @@ import (
 
 func ExampleSetupService() {
 	// A configuration loader can apply the defaults in ServiceConfig's tags.
-	cfg := otelx.ServiceConfig{}
+	dir, err := os.MkdirTemp("", "otelx-example-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			panic(err)
+		}
+	}()
+	cfg := otelx.ServiceConfig{
+		Enabled:       true,
+		TraceProtocol: "stdout",
+		StdoutFile:    filepath.Join(dir, "traces.json"),
+		MetricsMode:   "prometheus",
+		SampleRatio:   1,
+		Environment:   "local",
+	}
 	res := resource.NewSchemaless(
 		attribute.String("service.name", "orders"),
 		attribute.String("service.version", "1.0.0"),
@@ -54,4 +72,16 @@ func ExampleTrafficClassAttributes() {
 	attrs := otelx.TrafficClassAttributes(ctx)
 	fmt.Println(attrs[0].Key, attrs[0].Value.AsString())
 	// Output: traffic.class batch
+}
+
+func ExampleServiceEnvAliases() {
+	aliases := otelx.ServiceEnvAliases("telemetry")
+	fmt.Println(aliases["telemetry.trace_protocol"])
+	// Output: OTELX_TRACE_PROTOCOL
+}
+
+func ExampleValidateServiceConfig() {
+	cfg := otelx.ServiceConfig{}
+	fmt.Println(otelx.ValidateServiceConfig(cfg, nil))
+	// Output: <nil>
 }

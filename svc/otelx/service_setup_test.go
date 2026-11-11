@@ -169,3 +169,51 @@ func TestServiceEnvAliasesAndDescription(t *testing.T) {
 		t.Fatal("headers must be sensitive")
 	}
 }
+
+func TestServiceConfigConfloadInspectionAndValues(t *testing.T) {
+	type config struct {
+		Telemetry otelx.ServiceConfig `k:"telemetry"`
+	}
+	t.Setenv("OTELX_ENABLED", "true")
+	t.Setenv("OTELX_SAMPLE_RATIO", "0")
+	t.Setenv("OTELX_HEADERS", `{"authorization":"private-value"}`)
+	loader := confload.New(
+		confload.WithEnvAliases(otelx.ServiceEnvAliases("telemetry")),
+		confload.WithDecodeHooks(confload.JSONStringMapHook()),
+	)
+	var cfg config
+	if err := loader.Unmarshal(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Enabled || cfg.Telemetry.SampleRatio != 0 || cfg.Telemetry.Headers["authorization"] != "private-value" {
+		t.Fatal("environment values not loaded")
+	}
+	fields, err := confload.DescribeStruct[config]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := loader.Inspect(fields, cfg, loader.Snapshot(), confload.InspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var headersSeen, endpointSeen bool
+	for _, row := range rows {
+		switch row.Field.Path {
+		case "telemetry.headers":
+			headersSeen = row.Value == "[REDACTED]" && row.Env == "OTELX_HEADERS"
+		case "telemetry.endpoint":
+			endpointSeen = row.Value == "127.0.0.1:4318" && row.Env == "OTELX_ENDPOINT"
+		}
+	}
+	if !headersSeen || !endpointSeen {
+		t.Fatalf("inspection did not mask headers or expose endpoint: %v", rows)
+	}
+	t.Setenv("OTELX_ENABLED", "not-a-bool")
+	sourceFree := confload.New(
+		confload.WithFiles(filepath.Join(t.TempDir(), "missing.yaml")),
+		confload.WithEnvAliases(otelx.ServiceEnvAliases("telemetry")),
+	)
+	if _, err := sourceFree.Inspect(fields, nil, confload.Snapshot{}, confload.InspectOptions{}); err != nil {
+		t.Fatalf("schema inspection read configuration sources: %v", err)
+	}
+}
