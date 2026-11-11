@@ -149,6 +149,7 @@ func (p *parser) stringLiteral() (node, error) {
 			if p.i == len(p.s) {
 				return nil, p.fail("incomplete escape")
 			}
+			escaped := p.i
 			c := p.s[p.i]
 			p.i++
 			switch c {
@@ -161,6 +162,7 @@ func (p *parser) stringLiteral() (node, error) {
 			case 't':
 				b.WriteByte('\t')
 			default:
+				p.i = escaped
 				return nil, p.fail("invalid escape")
 			}
 			continue

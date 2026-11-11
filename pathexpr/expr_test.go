@@ -2,6 +2,7 @@ package pathexpr_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -123,5 +124,16 @@ func TestNumberAndWhitespaceSeparatedPath(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: got %#v, %v; want %#v", tc.source, got, err, tc.want)
 		}
+	}
+}
+
+func TestInvalidEscapePositionStartsAtCharacter(t *testing.T) {
+	_, err := pathexpr.Compile("'a\\é'")
+	var syntax *pathexpr.SyntaxError
+	if !errors.As(err, &syntax) {
+		t.Fatalf("Compile() error = %v, want SyntaxError", err)
+	}
+	if syntax.Pos.Offset != 3 || syntax.Pos.Column != 4 {
+		t.Fatalf("position = %+v, want offset 3 column 4", syntax.Pos)
 	}
 }
