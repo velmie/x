@@ -69,11 +69,13 @@ Enabled setup requires string attributes `service.name` and `service.version`, a
 non-empty environment, and an unset or empty `OTEL_RESOURCE_ATTRIBUTES`.
 
 `SetupService` owns its exporters, HTTP transport, and exclusive stdout output
-file. It does not install global providers. Collector HTTP error bodies and gRPC
-status messages are dropped because collectors may echo request headers. HTTP
-redirects are rejected without exposing their targets. Use the collector's own
-logs for those details. Partial-success messages in accepted responses are
-reported as the collector sends them. The zero configuration disables
+file. It does not install global providers. Collector HTTP response bodies are
+discarded. Non-redirect HTTP failures include the collector URL and numeric
+status. Redirects are rejected without exposing their targets. HTTP partial-success
+results are not reported by the exporter. Check the collector's own telemetry
+for rejected counts. For gRPC, collector status and partial-success messages
+are discarded, while status codes and rejected span counts are retained. Local
+connection and TLS errors retain their causes. The zero configuration disables
 telemetry. When enabled, collector endpoints use `host:port`, TLS is verified,
 and plaintext is allowed only for literal loopback addresses. `stdout` export
 requires a new output file. Prometheus uses a dedicated registry exposed via
@@ -365,18 +367,7 @@ install a handler at the executable boundary:
 otel.SetErrorHandler(otelx.NewErrorHandler(logger))
 ```
 
-The handler passes the original error to the logger without rewriting it. Configure the service's logging handler to
-redact well-known secret keys, for example with `slogx`. A service that needs a different summary can provide its own
-error handler. In this example, `summarize` is a service-owned function that produces the desired summary:
-
-```go
-// summarize is defined by the service.
-handler := otel.ErrorHandlerFunc(func(err error) {
-    logger.Error("telemetry failure", slog.Any("error", summarize(err)))
-})
-otel.SetErrorHandler(handler)
-```
-
+The handler logs errors as received without rewriting them. Errors must be made safe at the boundary that creates them.
 ## Legacy setup and migration
 
 `Config`, `DefaultConfig`, `ConfigFromEnv`, `Setup`, `SetupResult`, legacy factories/options, and existing `otelhttpx`

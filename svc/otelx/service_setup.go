@@ -30,9 +30,8 @@ import (
 // res supplies service.name and service.version as string attributes and is required
 // when enabled. Environment must be non-empty.
 // No global providers are installed. Stop producers and scraping before Shutdown.
-// Collector HTTP error bodies and gRPC status messages are dropped because they
-// may echo request headers. Collector redirects are rejected without exposing
-// their targets. Use the collector's own logs for those details.
+// Collector HTTP response bodies and gRPC status and partial-success messages
+// are discarded. Redirects are rejected without exposing their targets.
 func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource) (runtime *Runtime, err error) {
 	if !cfg.Enabled {
 		return Open(ctx, RuntimeConfig{})

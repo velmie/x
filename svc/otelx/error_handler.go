@@ -7,10 +7,8 @@ import (
 )
 
 // NewErrorHandler returns an asynchronous SDK error handler using logger. It
-// passes the original error to the logger without rewriting it and does not
-// install the handler globally. The service's logging handler is responsible
-// for redaction. Services that need a different summary can implement their own
-// otel.ErrorHandler.
+// logs errors as received without rewriting them and does not install the
+// handler globally. Errors must be made safe at the boundary that creates them.
 func NewErrorHandler(logger *slog.Logger) otel.ErrorHandler {
 	return otel.ErrorHandlerFunc(
 		func(err error) {

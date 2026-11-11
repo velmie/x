@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
-// collectorTransport removes collector error bodies and rejects redirects before
+// collectorTransport discards collector bodies and rejects redirects before
 // http.Client or the exporter can include collector data in an error. The
 // runtime owns the underlying transport.
 type collectorTransport struct {
@@ -20,27 +23,40 @@ type collectorTransport struct {
 
 func (t collectorTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := t.base.RoundTrip(request)
-	if err != nil || response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+	if err != nil {
 		return response, err
 	}
 	_, readErr := io.Copy(io.Discard, response.Body)
 	closeErr := response.Body.Close()
 	response.Body = http.NoBody
+	discardErr := errors.Join(readErr, closeErr)
 	if response.StatusCode >= http.StatusMultipleChoices && response.StatusCode < http.StatusBadRequest {
 		redirectErr := fmt.Errorf("export telemetry: collector HTTP %d redirect rejected", response.StatusCode)
-		if readErr != nil || closeErr != nil {
-			return nil, errors.Join(redirectErr, fmt.Errorf("discard collector response body: %w", errors.Join(readErr, closeErr)))
+		if discardErr != nil {
+			return nil, errors.Join(redirectErr, fmt.Errorf("discard collector response body: %w", discardErr))
 		}
 		return nil, redirectErr
 	}
-	if readErr != nil || closeErr != nil {
-		return nil, fmt.Errorf("discard collector HTTP %d response body: %w", response.StatusCode, errors.Join(readErr, closeErr))
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		endpoint := url.URL{
+			Scheme: request.URL.Scheme,
+			Host:   request.URL.Host,
+			Path:   request.URL.Path,
+		}
+		statusErr := fmt.Errorf("export telemetry to collector %s: HTTP %d", endpoint.String(), response.StatusCode)
+		if discardErr != nil {
+			return nil, errors.Join(statusErr, fmt.Errorf("discard collector response body: %w", discardErr))
+		}
+		return nil, statusErr
+	}
+	if discardErr != nil {
+		return nil, fmt.Errorf("discard collector response body: %w", discardErr)
 	}
 	return response, nil
 }
 
-// collectorStatusInterceptor excludes collector-provided status messages and
-// details while retaining the gRPC status code.
+// collectorStatusInterceptor removes collector messages while preserving local
+// connection errors and the rejected span count in successful responses.
 func collectorStatusInterceptor(
 	ctx context.Context,
 	method string,
@@ -50,9 +66,16 @@ func collectorStatusInterceptor(
 	invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption,
 ) error {
-	err := invoker(ctx, method, req, reply, cc, opts...)
+	var remote peer.Peer
+	err := invoker(ctx, method, req, reply, cc, append(opts, grpc.Peer(&remote))...)
 	if err == nil {
+		if response, ok := reply.(*collectortrace.ExportTraceServiceResponse); ok && response.PartialSuccess != nil {
+			response.PartialSuccess.ErrorMessage = ""
+		}
 		return nil
+	}
+	if remote.Addr == nil {
+		return err
 	}
 	code := status.Code(err)
 	return status.Error(code, code.String())
