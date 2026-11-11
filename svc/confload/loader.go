@@ -83,17 +83,18 @@ func (s Snapshot) clone() Snapshot {
 type EnvKeyFunc func(prefix, dotted string) string
 
 type options struct {
-	EnvPrefix     string
-	TagName       string
-	EnvKeyFunc    EnvKeyFunc
-	EnvAliases    map[string]string
-	ConfigFileEnv string
-	Defaults      map[string]any
-	Sources       []sourceEntry
-	FlagSet       *flag.FlagSet
-	Overrides     map[string]any
-	DecodeHooks   []mapstructure.DecodeHookFunc
-	Strict        bool
+	EnvPrefix          string
+	TagName            string
+	EnvKeyFunc         EnvKeyFunc
+	EnvAliases         map[string]string
+	SectionEnvPrefixes map[string]string
+	ConfigFileEnv      string
+	Defaults           map[string]any
+	Sources            []sourceEntry
+	FlagSet            *flag.FlagSet
+	Overrides          map[string]any
+	DecodeHooks        []mapstructure.DecodeHookFunc
+	Strict             bool
 }
 
 type sourceKind uint8
@@ -125,6 +126,27 @@ func WithEnvPrefix(prefix string) Option {
 			prefix += "_"
 		}
 		o.EnvPrefix = prefix
+	}
+}
+
+// WithSectionEnvPrefix assigns an environment prefix to a dotted section.
+// Calls accumulate, the longest matching section wins, and explicit aliases take
+// precedence. An empty section or prefix is ignored, as with WithEnvPrefix.
+// A custom EnvKeyFunc receives the section prefix and the relative path.
+func WithSectionEnvPrefix(section, prefix string) Option {
+	return func(o *options) {
+		section = strings.TrimSpace(section)
+		prefix = strings.TrimSpace(prefix)
+		if section == "" || prefix == "" {
+			return
+		}
+		if !strings.HasSuffix(prefix, "_") {
+			prefix += "_"
+		}
+		if o.SectionEnvPrefixes == nil {
+			o.SectionEnvPrefixes = make(map[string]string)
+		}
+		o.SectionEnvPrefixes[section] = prefix
 	}
 }
 
@@ -352,7 +374,7 @@ func (l *Loader) EnvName(dotted string) string {
 		return ""
 	}
 
-	return envNameForKey(l.opts.EnvPrefix, dotted, l.opts.EnvKeyFunc, l.opts.EnvAliases)
+	return envNameForKey(&l.opts, dotted)
 }
 
 // Snapshot returns the most recently captured configuration snapshot.
@@ -709,7 +731,7 @@ func (l *Loader) loadEnv(k *koanf.Koanf, keys []string, origins, boundaryOrigins
 		return nil
 	}
 
-	values := readEnvExact(l.opts.EnvPrefix, keys, l.opts.EnvKeyFunc, l.opts.EnvAliases)
+	values := readEnvExact(keys, l.EnvName)
 	if len(values) == 0 {
 		return nil
 	}
@@ -720,7 +742,7 @@ func (l *Loader) loadEnv(k *koanf.Koanf, keys []string, origins, boundaryOrigins
 	for key := range values {
 		origin := ValueOrigin{
 			Source:     SourceEnv,
-			Identifier: envNameForKey(l.opts.EnvPrefix, key, l.opts.EnvKeyFunc, l.opts.EnvAliases),
+			Identifier: l.EnvName(key),
 		}
 		origins[key] = origin
 		recordTreeOrigins(reflect.ValueOf(values[key]), key, origin, boundaryOrigins)
@@ -758,41 +780,40 @@ func normalizeTagName(tag string) string {
 	return tag
 }
 
-func envNameForKey(prefix, dotted string, fn EnvKeyFunc, aliases map[string]string) string {
-	if len(aliases) > 0 {
-		if alias, ok := aliases[dotted]; ok {
-			return strings.TrimSpace(alias)
+func envNameForKey(opts *options, dotted string) string {
+	if alias, ok := opts.EnvAliases[dotted]; ok {
+		return strings.TrimSpace(alias)
+	}
+	prefix, relative := opts.EnvPrefix, dotted
+	longest := 0
+	for section, sectionPrefix := range opts.SectionEnvPrefixes {
+		if len(section) > longest && (dotted == section || strings.HasPrefix(dotted, section+".")) {
+			longest = len(section)
+			prefix = sectionPrefix
+			relative = strings.TrimPrefix(dotted[len(section):], ".")
 		}
 	}
-
-	if fn != nil {
-		return strings.TrimSpace(fn(prefix, dotted))
+	if opts.EnvKeyFunc != nil {
+		return strings.TrimSpace(opts.EnvKeyFunc(prefix, relative))
 	}
-
-	return envName(prefix, dotted)
+	return envName(prefix, relative)
 }
 
-func readEnvExact(prefix string, keys []string, fn EnvKeyFunc, aliases map[string]string) map[string]any {
+func readEnvExact(keys []string, envName func(string) string) map[string]any {
 	out := make(map[string]any)
 	for _, key := range keys {
-		envKey := envNameForKey(prefix, key, fn, aliases)
+		envKey := envName(key)
 		if envKey == "" {
 			continue
 		}
-
 		if val, ok := os.LookupEnv(envKey); ok {
 			out[key] = val
-
 			continue
 		}
-
 		if list := readEnvList(envKey); len(list) > 0 {
 			out[key] = list
-
-			continue
 		}
 	}
-
 	return out
 }
 
@@ -1017,7 +1038,7 @@ func (l *Loader) loadCollectionEnv(
 			return nil, fmt.Errorf("environment variable %s conflicts between paths %s", name, strings.Join(paths, ", "))
 		}
 	}
-	staticValues := readEnvExact(l.opts.EnvPrefix, keys, l.opts.EnvKeyFunc, l.opts.EnvAliases)
+	staticValues := readEnvExact(keys, l.EnvName)
 	dynamicValues := make(map[string]any)
 	for _, target := range targets {
 		name := l.EnvName(target.path)

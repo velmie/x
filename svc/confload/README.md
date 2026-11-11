@@ -263,6 +263,25 @@ APP_ALLOWED_ORIGINS_0=https://a.example.com
 APP_ALLOWED_ORIGINS_1=https://b.example.com
 ```
 
+### Section environment prefixes
+
+Libraries can own the environment prefix for a configuration section. Install
+one option per section; the longest matching section wins and explicit aliases
+have precedence. Collection elements use the same mapping.
+
+```go
+loader := confload.New(
+    confload.WithEnvPrefix("APP_"),
+    confload.WithSectionEnvPrefix("telemetry", "OTELX_"),
+)
+```
+
+For example, `telemetry.headers.authorization` maps to
+`OTELX_HEADERS_AUTHORIZATION`. A custom `EnvKeyFunc` receives `OTELX_` and
+`headers.authorization`. Use `loader.EnvName` for the effective name in help
+and inspection output. `FieldDescriptor.EnvName` and `FieldCollection.EnvMap`
+only use their explicit root prefix and do not account for loader options.
+
 ### Custom environment mapping
 
 Override how dotted keys map to environment variable names or provide explicit aliases.

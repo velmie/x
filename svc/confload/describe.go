@@ -28,6 +28,7 @@ type FieldDescriptor struct {
 }
 
 // EnvName renders the environment variable name for the descriptor using the provided prefix.
+// It does not account for loader aliases, section prefixes, or a custom key function.
 //
 //nolint:gocritic // Keep the published value receiver.
 func (d FieldDescriptor) EnvName(prefix string) string {
@@ -69,6 +70,7 @@ func (c FieldCollection) Lookup(path string) (FieldDescriptor, bool) {
 }
 
 // EnvMap builds a map of dotted paths to their environment variable names using the provided prefix.
+// It does not account for loader aliases, section prefixes, or a custom key function.
 func (c FieldCollection) EnvMap(prefix string) map[string]string {
 	if len(c.fields) == 0 {
 		return nil
