@@ -83,3 +83,17 @@ func ExampleProcessingLogConfig() {
 	}, nil))
 	// Output: ERROR
 }
+
+func ExampleWrapProcessing() {
+	handler := broker.NewHandler(func(context.Context, broker.Delivery) (broker.Disposition, error) {
+		return broker.Handled{}, nil
+	})
+	handler = brokerx.WrapProcessing(handler, slog.Default(), brokerx.ProcessingConfig{
+		Errors: brokerx.RetryErrors(time.Second),
+		Log:    brokerx.ProcessingLogConfig(),
+	})
+	result, _ := handler.Handle(context.Background(), broker.NewDelivery(broker.Message{}, "orders"))
+	_, handled := result.(broker.Handled)
+	fmt.Println(handled)
+	// Output: true
+}

@@ -49,3 +49,18 @@ its consumer if a retry is requested after a finite `MaxDeliver` is exhausted.
 Setting `MaxDeliver=-1` permits indefinite retries, including permanent errors.
 JetStream does not provide an automatic dead-letter queue. Select a retry delay
 and operational policy appropriate to the adapter.
+
+`WrapProcessing` assembles optional tracing, processing logs, error policy, and
+panic recovery in that order. It preserves the handler's requirements and adds
+those declared by the middleware:
+
+```go
+handler = brokerx.WrapProcessing(handler, logger, brokerx.ProcessingConfig{
+    Trace: processingTrace, // optional broker.HandlerMiddleware
+    Errors: brokerx.RetryErrors(time.Second),
+    Log: brokerx.ProcessingLogConfig(),
+})
+```
+
+Tracing observes the classified outcome and supplies the context used for logs
+and the callback. The supplied trace middleware must preserve results.
