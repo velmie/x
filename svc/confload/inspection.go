@@ -274,7 +274,7 @@ func collectionContainsSensitive(t reflect.Type) bool {
 	if t.Kind() != reflect.Map && t.Kind() != reflect.Slice && t.Kind() != reflect.Array {
 		return false
 	}
-	return typeContainsSensitive(t.Elem(), make(map[reflect.Type]bool))
+	return typeContainsSensitive(t, make(map[reflect.Type]bool))
 }
 
 func typeContainsSensitive(t reflect.Type, visited map[reflect.Type]bool) bool {

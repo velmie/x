@@ -2,6 +2,7 @@ package confload
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -172,5 +173,15 @@ func TestInspectionMasksMismatchedMapKeyDefaults(t *testing.T) {
 		var output bytes.Buffer
 		require.NoError(t, WriteInspection(&output, format, rows))
 		require.NotContains(t, output.String(), "key-mismatch-canary")
+	}
+}
+
+func TestOpaqueCollectionWithSensitiveKeyIsRedacted(t *testing.T) {
+	type key struct {
+		Token string `sensitive:"true"`
+	}
+	value := []map[key]string{{{Token: "secret-canary"}: "x"}}
+	if got := inspectionOpaqueValue(reflect.TypeOf(value), reflect.ValueOf(value)); got != inspectionRedacted {
+		t.Fatalf("opaque collection with a sensitive key: %v", got)
 	}
 }
