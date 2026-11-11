@@ -32,3 +32,20 @@ func ExampleExpr_Inspect() {
 	fmt.Println(info.IsObject, info.Paths, info.Keys, info.Depth)
 	// Output: true [event.id event.secret] [id extra] 1
 }
+
+func ExampleCompilePath() {
+	path, err := pathexpr.CompilePath("profile.name")
+	if err != nil {
+		panic(err)
+	}
+	source := map[string]any{}
+	if err := path.Set(source, "Alex"); err != nil {
+		panic(err)
+	}
+	value, err := path.Get(source)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(value)
+	// Output: Alex
+}
