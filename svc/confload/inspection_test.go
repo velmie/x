@@ -18,6 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testJSONFormat = "json"
+	testTextFormat = "text"
+)
+
 type inspectionConfig struct {
 	Name      string              `k:"name" default:"default-name"`
 	Zero      int                 `k:"zero"`
@@ -39,6 +44,108 @@ type inspectionSecret string
 
 func (inspectionSecret) String() string               { panic("sensitive value formatted") }
 func (inspectionSecret) MarshalJSON() ([]byte, error) { panic("sensitive value marshaled") }
+
+type inspectionRecursive struct {
+	Next   *inspectionRecursive
+	Secret inspectionSecret `sensitive:"true"`
+}
+
+func TestInspectMasksCollectionsWithSensitiveDescendants(t *testing.T) {
+	type credentials struct {
+		Password inspectionSecret `k:"password" sensitive:"true"`
+	}
+	type endpoint struct {
+		Name        string        `k:"name"`
+		Credentials **credentials `k:"credentials"`
+	}
+	type config struct {
+		Endpoints map[string]*endpoint   `k:"endpoints"`
+		Routes    []endpoint             `k:"routes"`
+		Arrays    [1][]*endpoint         `k:"arrays"`
+		Public    []string               `k:"public"`
+		Recursive []*inspectionRecursive `k:"recursive"`
+	}
+	secret := &credentials{
+		Password: "decoded-secret",
+	}
+	endpointValue := endpoint{
+		Name:        "service",
+		Credentials: &secret,
+	}
+	cfg := config{
+		Endpoints: map[string]*endpoint{"one": &endpointValue},
+		Routes:    []endpoint{endpointValue},
+		Arrays:    [1][]*endpoint{{&endpointValue}},
+		Public:    []string{"visible"},
+	}
+	defaultSecret := &credentials{
+		Password: "default-secret",
+	}
+	defaultEndpoint := endpoint{
+		Name:        "default",
+		Credentials: &defaultSecret,
+	}
+	defaults := map[string]any{
+		"endpoints": map[string]*endpoint{"default": &defaultEndpoint},
+		"routes":    []endpoint{defaultEndpoint},
+		"arrays":    [1][]*endpoint{{&defaultEndpoint}},
+		"public":    []string{"default-visible"},
+	}
+	fields, err := DescribeStruct[config]()
+	require.NoError(t, err)
+	loader := New(WithDefaults(defaults))
+	for _, inspect := range []struct {
+		name string
+		fn   func(any) ([]InspectionField, error)
+	}{
+		{
+			name: "package",
+			fn: func(value any) ([]InspectionField, error) {
+				return Inspect(fields, value, Snapshot{}, InspectOptions{})
+			},
+		},
+		{
+			name: "loader",
+			fn: func(value any) ([]InspectionField, error) {
+				return loader.Inspect(fields, value, Snapshot{}, InspectOptions{})
+			},
+		},
+	} {
+		t.Run(inspect.name, func(t *testing.T) {
+			for _, value := range []any{nil, cfg} {
+				rows, err := inspect.fn(value)
+				require.NoError(t, err)
+				for _, row := range rows {
+					switch row.Field.Path {
+					case "arrays", "endpoints", "recursive", "routes":
+						require.Equal(t, "[REDACTED]", row.Field.Default)
+						require.NotEqual(t, "true", row.Field.Attributes["sensitive"])
+						if value != nil {
+							require.Equal(t, "[REDACTED]", row.Value)
+						}
+					case "public":
+						if value != nil {
+							require.Equal(t, []string{"visible"}, row.Value)
+						}
+					}
+				}
+				for _, format := range []string{testTextFormat, testJSONFormat} {
+					var out bytes.Buffer
+					require.NoError(t, WriteInspection(&out, format, rows))
+					require.NotContains(t, out.String(), "decoded-secret")
+					require.NotContains(t, out.String(), "default-secret")
+				}
+			}
+		})
+	}
+	require.Equal(t, inspectionSecret("decoded-secret"), secret.Password)
+	require.Equal(t, inspectionSecret("default-secret"), defaultSecret.Password)
+	require.Equal(t, "service", cfg.Endpoints["one"].Name)
+	require.Equal(t, "default", defaults["endpoints"].(map[string]*endpoint)["default"].Name)
+	descriptor, ok := fields.Lookup("endpoints")
+	require.True(t, ok)
+	require.NotEqual(t, "true", descriptor.Attributes["sensitive"])
+}
 
 func TestInspectAndWriteInspection(t *testing.T) {
 	fields, err := DescribeStruct[inspectionConfig]()
@@ -92,7 +199,7 @@ func TestInspectAndWriteInspection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fields.Len(), len(rows))
 	var out bytes.Buffer
-	require.NoError(t, WriteInspection(&out, "json", rows))
+	require.NoError(t, WriteInspection(&out, testJSONFormat, rows))
 	text := out.String()
 	for _, absent := range []string{
 		"secret-default",
@@ -123,7 +230,7 @@ func TestInspectAndWriteInspection(t *testing.T) {
 		require.Equal(t, "[REDACTED]", byName[path]["value"])
 	}
 	out.Reset()
-	require.NoError(t, WriteInspection(&out, "text", rows))
+	require.NoError(t, WriteInspection(&out, testTextFormat, rows))
 	require.Contains(t, out.String(), `line1\nline2`)
 	require.NotContains(t, out.String(), "line1\nline2")
 	require.NotContains(t, out.String(), "fixture-private")
@@ -138,7 +245,7 @@ func TestInspectSchemaOnlyAndTypeMismatch(t *testing.T) {
 	require.NoError(t, WriteInspection(&out, "", rows))
 	require.NotContains(t, out.String(), " value=")
 	out.Reset()
-	require.NoError(t, WriteInspection(&out, "json", rows))
+	require.NoError(t, WriteInspection(&out, testJSONFormat, rows))
 	var decoded []map[string]any
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	for _, row := range decoded {
@@ -157,7 +264,7 @@ func TestWriteInspectionErrors(t *testing.T) {
 	require.NoError(t, err)
 	rows, err := Inspect(fields, nil, Snapshot{}, InspectOptions{})
 	require.NoError(t, err)
-	for _, format := range []string{"text", "json"} {
+	for _, format := range []string{testTextFormat, testJSONFormat} {
 		err := WriteInspection(
 			failingInspectionWriter{
 				cause: cause,
@@ -253,10 +360,10 @@ func TestConversionDiagnosticsInJSONAndTextLogs(t *testing.T) {
 	loader := New(WithOverrides(overrides))
 	_, err := LoadInto[config](loader)
 	require.Error(t, err)
-	for _, format := range []string{"json", "text"} {
+	for _, format := range []string{testJSONFormat, testTextFormat} {
 		var out bytes.Buffer
 		var handler slog.Handler
-		if format == "json" {
+		if format == testJSONFormat {
 			handler = slog.NewJSONHandler(&out, nil)
 		} else {
 			handler = slog.NewTextHandler(&out, nil)

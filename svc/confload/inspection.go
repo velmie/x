@@ -102,7 +102,7 @@ func inspect(
 	}
 	rows := make([]InspectionField, 0, fields.Len())
 	for _, field := range fields.Fields() {
-		sensitive := field.Attributes[sensitiveTag] == sensitiveTagEnabled
+		sensitive := field.Attributes[sensitiveTag] == sensitiveTagEnabled || collectionContainsSensitive(field.Type)
 		if sensitive {
 			field.Default = inspectionRedacted
 		} else if defaults != nil {
@@ -224,6 +224,37 @@ type inspectionJSONField struct {
 type inspectionJSONOrigin struct {
 	Source     SourceType `json:"source"`
 	Identifier string     `json:"identifier"`
+}
+
+func collectionContainsSensitive(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Map && t.Kind() != reflect.Slice && t.Kind() != reflect.Array {
+		return false
+	}
+	return typeContainsSensitive(t.Elem(), make(map[reflect.Type]bool))
+}
+
+func typeContainsSensitive(t reflect.Type, visited map[reflect.Type]bool) bool {
+	if visited[t] {
+		return false
+	}
+	visited[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return typeContainsSensitive(t.Elem(), visited)
+	case reflect.Map:
+		return typeContainsSensitive(t.Key(), visited) || typeContainsSensitive(t.Elem(), visited)
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if field.Tag.Get(sensitiveTag) == sensitiveTagEnabled || typeContainsSensitive(field.Type, visited) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func inspectionValue(root reflect.Value, field FieldDescriptor) (any, error) {
