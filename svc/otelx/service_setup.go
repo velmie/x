@@ -29,6 +29,9 @@ import (
 // SetupService opens the selected pipelines and owns their resources.
 // res supplies explicit service identity and is required when enabled.
 // No global providers are installed. Stop producers and scraping before Shutdown.
+// Collector HTTP error bodies and gRPC status messages are dropped because they
+// may echo request headers. Collector redirects are rejected without exposing
+// their targets. Use the collector's own logs for those details.
 func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource) (runtime *Runtime, err error) {
 	if !cfg.Enabled {
 		return Open(ctx, RuntimeConfig{})
@@ -82,9 +85,10 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 			TLSClientConfig: tlsConfig,
 		}
 		client = &http.Client{
-			Transport:     transport,
-			Timeout:       time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("telemetry redirect rejected") },
+			Transport: collectorTransport{
+				base: transport,
+			},
+			Timeout: time.Second,
 		}
 	}
 	scheme := "https"
@@ -143,7 +147,11 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 				otlptracegrpc.WithRetry(otlptracegrpc.RetryConfig{
 					Enabled: false,
 				}),
-				otlptracegrpc.WithDialOption(grpc.WithNoProxy(), grpc.WithDisableRetry()),
+				otlptracegrpc.WithDialOption(
+					grpc.WithNoProxy(),
+					grpc.WithDisableRetry(),
+					grpc.WithChainUnaryInterceptor(collectorStatusInterceptor),
+				),
 			}
 			if cfg.LocalPlaintext {
 				grpcOptions = append(grpcOptions, otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()))
