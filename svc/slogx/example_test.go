@@ -75,7 +75,9 @@ func ExampleDefaultSecretKeys() {
 }
 
 func ExampleNewHandler() {
-	handler, err := slogx.NewHandler(os.Stdout, slogx.Config{Format: "text"})
+	handler, err := slogx.NewHandler(os.Stdout, slogx.Config{
+		Format: "TeXt",
+	})
 	if err != nil {
 		panic(err)
 	}
