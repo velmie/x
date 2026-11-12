@@ -46,7 +46,10 @@ unused in Prometheus mode, where scrapes drive collection, and
 collector HTTP client, and the gRPC exporter. Zero uses the default and
 negative values are rejected.
 
-`ValidateServiceConfig` reports only configuration fields, using relative
+Use `ValidateServiceSetup(cfg.Telemetry, res)` to check the service configuration,
+resource identity, environment, and propagation without starting telemetry. It
+does not read the CA file or create the trace output file. `ValidateServiceConfig`
+checks configuration fields only. Both report field errors using relative
 `k` paths in `*validation.Error`. When handling `SetupService` errors, prefix
 those paths with the configuration section. Other errors matching
 `otelx.ErrInvalidConfig` reject the section because of its resource, environment,

@@ -86,3 +86,20 @@ func ExampleValidateServiceConfig() {
 	fmt.Println(otelx.ValidateServiceConfig(cfg))
 	// Output: <nil>
 }
+
+func ExampleValidateServiceSetup() {
+	cfg := otelx.ServiceConfig{
+		Enabled:       true,
+		TraceProtocol: "stdout",
+		StdoutFile:    "traces.json",
+		MetricsMode:   "prometheus",
+		Environment:   "local",
+	}
+	res := resource.NewSchemaless(
+		attribute.String("service.name", "orders"),
+		attribute.String("service.version", "1.0.0"),
+	)
+	if err := otelx.ValidateServiceSetup(cfg, res); err != nil {
+		panic(err)
+	}
+}

@@ -33,20 +33,11 @@ import (
 // Collector HTTP response bodies and gRPC status and partial-success messages
 // are discarded. Redirects are rejected without exposing their targets.
 func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource) (runtime *Runtime, err error) {
-	if !cfg.Enabled {
-		return Open(ctx, RuntimeConfig{})
-	}
-	if err := ValidateServiceConfig(cfg); err != nil {
+	if err := ValidateServiceSetup(cfg, res); err != nil {
 		return nil, err
 	}
-	for _, key := range []attribute.Key{"service.name", "service.version"} {
-		value, ok := res.Set().Value(key)
-		if !ok || value.Type() != attribute.STRING {
-			return nil, fmt.Errorf("telemetry resource attribute %s: expected a string: %w", key, ErrInvalidConfig)
-		}
-	}
-	if os.Getenv(resourceAttributesEnv) != "" {
-		return nil, fmt.Errorf("telemetry environment variable %s: expected unset or empty when telemetry is enabled: %w", resourceAttributesEnv, ErrInvalidConfig)
+	if !cfg.Enabled {
+		return Open(ctx, RuntimeConfig{})
 	}
 	if cfg.BatchTimeout == 0 {
 		cfg.BatchTimeout = 100 * time.Millisecond
@@ -79,7 +70,7 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 	}
 	policy, err := servicePropagation(cfg)
 	if err != nil {
-		return nil, errors.Join(ErrInvalidConfig, fmt.Errorf("invalid telemetry propagation: %w", err))
+		return nil, err
 	}
 
 	tlsConfig := &tls.Config{
@@ -243,6 +234,34 @@ func SetupService(ctx context.Context, cfg ServiceConfig, res *resource.Resource
 	return runtime, nil
 }
 
+// ValidateServiceSetup checks the configuration, resource identity, environment,
+// and propagation used by SetupService without opening files, connections,
+// listeners, exporters, or workers. Disabled telemetry always passes.
+// Configuration field violations use relative k paths and invalid configurations
+// match ErrInvalidConfig. It does not check whether the CA file can be read or
+// contains valid certificates, or whether the trace output file can be created.
+func ValidateServiceSetup(cfg ServiceConfig, res *resource.Resource) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if err := ValidateServiceConfig(cfg); err != nil {
+		return err
+	}
+	for _, key := range []attribute.Key{"service.name", "service.version"} {
+		value, ok := res.Set().Value(key)
+		if !ok || value.Type() != attribute.STRING {
+			return fmt.Errorf("telemetry resource attribute %s: expected a string: %w", key, ErrInvalidConfig)
+		}
+	}
+	if os.Getenv(resourceAttributesEnv) != "" {
+		return fmt.Errorf("telemetry environment variable %s: expected unset or empty when telemetry is enabled: %w", resourceAttributesEnv, ErrInvalidConfig)
+	}
+	if _, err := servicePropagation(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
 func servicePropagation(cfg ServiceConfig) (*Propagation, error) {
 	policy := PropagationPolicy{
 		Format: cfg.Propagation,
@@ -255,5 +274,9 @@ func servicePropagation(cfg ServiceConfig) (*Propagation, error) {
 			},
 		}
 	}
-	return NewPropagation(policy)
+	propagator, err := NewPropagation(policy)
+	if err != nil {
+		return nil, errors.Join(ErrInvalidConfig, fmt.Errorf("invalid telemetry propagation: %w", err))
+	}
+	return propagator, nil
 }
