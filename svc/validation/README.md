@@ -113,3 +113,10 @@ collector is empty. `FromStruct` converts one native result, while `Invalid`
 reports one plain check. `At` copies an error and prefixes its field paths for
 a containing section. Paths and rule parameters must be safe to expose.
 Rejected values are not included in the generated violations.
+
+For decoded configuration, use `DottedPaths` to copy an `Error` with collection
+paths in dotted notation, matching configuration field names: `endpoints[crm].url`
+becomes `endpoints.crm.url`. It replaces every `[` with `.` and removes every
+`]`, so keys containing `.`, `[` or `]` have ambiguous paths and are not escaped.
+The cause is retained. Use it with `FromStruct`, `AddStruct`, `Invalid` and `At`.
+Do not use it for HTTP payloads whose field paths are published wire contracts.

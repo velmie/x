@@ -100,3 +100,24 @@ func At(prefix string, err error) error {
 		Cause:      failure.Cause,
 	}
 }
+
+// DottedPaths returns a copy of an Error with '[' replaced by '.' and ']' removed
+// from each field path. Keys containing '.', '[' or ']' are therefore ambiguous
+// and cannot be recovered from the result. Other errors, including nil, pass
+// through unchanged. The original cause is retained.
+func DottedPaths(err error) error {
+	failure, ok := err.(*Error)
+	if !ok {
+		return err
+	}
+	violations := make([]apperror.Violation, len(failure.Violations))
+	copy(violations, failure.Violations)
+	for i := range violations {
+		field := strings.ReplaceAll(violations[i].Field, "[", ".")
+		violations[i].Field = strings.ReplaceAll(field, "]", "")
+	}
+	return &Error{
+		Violations: violations,
+		Cause:      failure.Cause,
+	}
+}

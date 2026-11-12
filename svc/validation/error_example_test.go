@@ -36,6 +36,28 @@ func ExampleAt() {
 	// Output: db.host: required
 }
 
+func ExampleDottedPaths() {
+	type endpoint struct {
+		URL string `k:"url" validate:"required"`
+	}
+	type config struct {
+		Endpoints map[string]endpoint `k:"endpoints" validate:"dive"`
+	}
+	cfg := config{
+		Endpoints: map[string]endpoint{
+			"crm": {},
+		},
+	}
+	v := validator.New()
+	v.RegisterTagNameFunc(validation.FieldNames("k"))
+	err := validation.DottedPaths(validation.FromStruct(cfg, v.Struct(cfg)))
+	var failure *validation.Error
+	if errors.As(err, &failure) {
+		fmt.Println(failure.Violations[0].Field, failure.Violations[0].Rule)
+	}
+	// Output: endpoints.crm.url required
+}
+
 func ExampleError() {
 	type authConfig struct {
 		Issuer string `k:"issuer" validate:"required"`
