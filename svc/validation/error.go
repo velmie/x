@@ -2,11 +2,14 @@ package validation
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/velmie/x/svc/apperror"
 )
+
+var joinedErrorType = reflect.TypeOf(errors.Join(errors.New("")))
 
 // Error reports field violations and retains the original cause.
 type Error struct {
@@ -14,7 +17,9 @@ type Error struct {
 	Cause      error
 }
 
-// Error describes the violations and their cause.
+// Error describes the violations and their cause, omitting direct validator
+// failures and those in joined causes from the cause text. Wrapped validator
+// failures retain their wrapper's text. All causes remain available via Unwrap.
 func (e *Error) Error() string {
 	details := make([]string, 0, len(e.Violations))
 	for _, violation := range e.Violations {
@@ -25,11 +30,11 @@ func (e *Error) Error() string {
 		details = append(details, detail)
 	}
 	text := strings.Join(details, ", ")
-	if e.Cause != nil {
+	if cause, present := causeText(e.Cause); present {
 		if text != "" {
 			text += ": "
 		}
-		text += strings.ReplaceAll(e.Cause.Error(), "\n", "; ")
+		text += strings.ReplaceAll(cause, "\n", "; ")
 	}
 	return text
 }
@@ -58,6 +63,20 @@ func (e *Error) AddStruct(root any, err error) {
 		e.Violations = append(e.Violations, Violations(root, failures)...)
 	}
 	e.Cause = errors.Join(e.Cause, err)
+}
+
+// Merge adds the violations and cause of err to e.
+func (e *Error) Merge(err error) {
+	if err == nil {
+		return
+	}
+	if failure, ok := err.(*Error); ok {
+		e.Violations = append(e.Violations, failure.Violations...)
+		err = failure.Cause
+	}
+	if err != nil {
+		e.Cause = errors.Join(e.Cause, err)
+	}
 }
 
 // Err returns the collector when it contains violations or a cause, otherwise nil.
@@ -99,4 +118,46 @@ func At(prefix string, err error) error {
 		Violations: violations,
 		Cause:      failure.Cause,
 	}
+}
+
+// DottedPaths returns a copy of an Error with '[' replaced by '.' and ']' removed
+// from each field path. Keys containing '.', '[' or ']' are therefore ambiguous
+// and cannot be recovered from the result. Other errors, including nil, pass
+// through unchanged. The original cause is retained.
+func DottedPaths(err error) error {
+	failure, ok := err.(*Error)
+	if !ok {
+		return err
+	}
+	violations := make([]apperror.Violation, len(failure.Violations))
+	copy(violations, failure.Violations)
+	for i := range violations {
+		field := strings.ReplaceAll(violations[i].Field, "[", ".")
+		violations[i].Field = strings.ReplaceAll(field, "]", "")
+	}
+	return &Error{
+		Violations: violations,
+		Cause:      failure.Cause,
+	}
+}
+
+func causeText(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	if _, ok := err.(validator.ValidationErrors); ok {
+		return "", false
+	}
+	// Only errors.Join has its members rendered separately. Other wrappers can
+	// carry their own context and must retain their original text.
+	if reflect.TypeOf(err) == joinedErrorType {
+		var details []string
+		for _, child := range err.(interface{ Unwrap() []error }).Unwrap() {
+			if detail, present := causeText(child); present {
+				details = append(details, detail)
+			}
+		}
+		return strings.Join(details, "\n"), len(details) > 0
+	}
+	return err.Error(), true
 }

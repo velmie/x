@@ -13,6 +13,13 @@ import (
 	"github.com/velmie/x/svc/validation"
 )
 
+type multiCause struct {
+	child error
+}
+
+func (e multiCause) Error() string   { return "multi context: " + e.child.Error() }
+func (e multiCause) Unwrap() []error { return []error{e.child} }
+
 func TestConfigurationErrors(t *testing.T) {
 	type child struct {
 		Name string `k:"name" validate:"required"`
@@ -61,7 +68,7 @@ func TestConfigurationErrors(t *testing.T) {
 	if !errors.As(got, &native) {
 		t.Fatalf("cause not retained: %v", got)
 	}
-	if !strings.Contains(got.Error(), "limit: gte=2") || !strings.Contains(got.Error(), strings.ReplaceAll(cause.Error(), "\n", "; ")) {
+	if !strings.Contains(got.Error(), "limit: gte=2") || strings.Contains(got.Error(), "Field validation for") {
 		t.Fatalf("error text: %q", got)
 	}
 	prefixed := validation.At("a", validation.At("b", got))
@@ -94,5 +101,80 @@ func TestConfigurationErrors(t *testing.T) {
 	invalidType := v.Struct(42)
 	if !errors.Is(validation.FromStruct(cfg, invalidType), invalidType) {
 		t.Fatal("invalid validation error changed")
+	}
+}
+
+func TestErrorCauseText(t *testing.T) {
+	type config struct {
+		Name string `validate:"required"`
+	}
+	cfg := config{}
+	cause := validator.New().Struct(cfg)
+	other := errors.New("first line\nsecond line")
+	wrapped := fmt.Errorf("context: %w", cause)
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{
+			name:  "direct validator",
+			cause: cause,
+			want:  "field: required",
+		},
+		{
+			name:  "nested joins",
+			cause: errors.Join(cause, errors.Join(other, cause)),
+			want:  "field: required: first line; second line",
+		},
+		{
+			name:  "wrapped validator",
+			cause: errors.Join(cause, wrapped, other),
+			want:  "field: required: " + strings.ReplaceAll(wrapped.Error(), "\n", "; ") + "; first line; second line",
+		},
+		{
+			name:  "only cause",
+			cause: other,
+			want:  "field: required: first line; second line",
+		},
+		{
+			name: "multi wrapper",
+			cause: multiCause{
+				child: cause,
+			},
+			want: "field: required: multi context: " + strings.ReplaceAll(cause.Error(), "\n", "; "),
+		},
+		{
+			name:  "empty cause",
+			cause: errors.New(""),
+			want:  "field: required: ",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &validation.Error{
+				Violations: []apperror.Violation{
+					{
+						Field: "field",
+						Rule:  "required",
+					},
+				},
+				Cause: tc.cause,
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("text = %q, want %q", got, tc.want)
+			}
+			if !reflect.DeepEqual(errors.Unwrap(err), tc.cause) {
+				t.Fatal("cause changed")
+			}
+			if tc.name == "nested joins" && !errors.Is(err, other) {
+				t.Fatal("joined cause lost")
+			}
+			if tc.name != "only cause" && tc.name != "empty cause" {
+				var native validator.ValidationErrors
+				if !errors.As(err, &native) {
+					t.Fatal("validator cause lost")
+				}
+			}
+		})
 	}
 }
