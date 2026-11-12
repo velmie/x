@@ -51,8 +51,19 @@ index wraps `ErrNotFound`. Type mismatches are reported through `TypeError` and
 A field suffix `?` omits a missing result. `??` also omits nil and zero values,
 including zero structs and arrays. Non-nil empty maps and slices remain.
 Neither suffix suppresses type errors. A suffix on a nested object applies to
-the entire object. `Expr.Inspect` exposes every syntactic path and output key,
-including optional fields, for configuration policy checks.
+the entire object. `Expr.Inspect` exposes every syntactic path, its source
+position, and every output key, including optional fields, for configuration
+policy checks. For example:
+
+```go
+info := expr.Inspect()
+for i, path := range info.Paths {
+    if path != "event" && !strings.HasPrefix(path, "event.") && !strings.HasPrefix(path, "event[") && path != "message.id" {
+        pos := info.PathPositions[i]
+        return fmt.Errorf("disallowed path %q at line %d, column %d", path, pos.Line, pos.Column)
+    }
+}
+```
 
 When decoding JSON input, use `json.Decoder.UseNumber` to preserve its number
 spelling. Evaluation cannot recover precision already lost during decoding.

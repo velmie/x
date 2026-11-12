@@ -6,6 +6,9 @@ type Info struct {
 	IsObject bool
 	// Paths lists all canonical path occurrences in source order.
 	Paths []string
+	// PathPositions lists the position of the first source character of each
+	// corresponding path in Paths.
+	PathPositions []Position
 	// Keys lists all output-key occurrences in source order.
 	Keys []string
 	// Depth is the maximum number of nested object constructors.
@@ -13,7 +16,8 @@ type Info struct {
 }
 
 // Inspect returns caller-owned information in source order. Paths and Keys
-// retain occurrences, and Depth counts nested object constructors.
+// retain occurrences, PathPositions locates each path in the compiled source,
+// and Depth counts nested object constructors.
 func (e Expr) Inspect() Info {
 	info := Info{}
 	_, info.IsObject = e.root.(objectNode)
@@ -25,6 +29,7 @@ func inspectNode(n node, depth int, info *Info) {
 	switch n := n.(type) {
 	case pathNode:
 		info.Paths = append(info.Paths, n.text)
+		info.PathPositions = append(info.PathPositions, n.pos)
 	case objectNode:
 		depth++
 		if depth > info.Depth {
