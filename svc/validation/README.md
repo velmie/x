@@ -114,6 +114,12 @@ reports one plain check. `At` copies an error and prefixes its field paths for
 a containing section. Paths and rule parameters must be safe to expose.
 Rejected values are not included in the generated violations.
 
+`Error()` omits the text of direct `validator.ValidationErrors` causes and
+those inside `errors.Join`, because their violations are already listed. This
+changes log output, not the violations. Other cause text, including wrappers
+around validator errors, is retained. All original causes remain available via
+`Unwrap`, `errors.Is` and `errors.As`.
+
 For decoded configuration, use `DottedPaths` to copy an `Error` with collection
 paths in dotted notation, matching configuration field names: `endpoints[crm].url`
 becomes `endpoints.crm.url`. It replaces every `[` with `.` and removes every
