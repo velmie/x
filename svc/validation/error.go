@@ -65,6 +65,20 @@ func (e *Error) AddStruct(root any, err error) {
 	e.Cause = errors.Join(e.Cause, err)
 }
 
+// Merge adds the violations and cause of err to e.
+func (e *Error) Merge(err error) {
+	if err == nil {
+		return
+	}
+	if failure, ok := err.(*Error); ok {
+		e.Violations = append(e.Violations, failure.Violations...)
+		err = failure.Cause
+	}
+	if err != nil {
+		e.Cause = errors.Join(e.Cause, err)
+	}
+}
+
 // Err returns the collector when it contains violations or a cause, otherwise nil.
 func (e *Error) Err() error {
 	if len(e.Violations) == 0 && e.Cause == nil {

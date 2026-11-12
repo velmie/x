@@ -58,6 +58,14 @@ func ExampleDottedPaths() {
 	// Output: endpoints.crm.url required
 }
 
+func ExampleError_Merge() {
+	var failures validation.Error
+	failures.Merge(validation.At("database", validation.Invalid("host", apperror.RuleRequired, "", nil)))
+	failures.Merge(validation.Invalid("mode", apperror.RuleEQ, "tls", nil))
+	fmt.Println(failures.Err())
+	// Output: database.host: required, mode: eq=tls
+}
+
 func ExampleError() {
 	type authConfig struct {
 		Issuer string `k:"issuer" validate:"required"`

@@ -2,6 +2,8 @@ package validation_test
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,6 +40,58 @@ func TestErrorCollector(t *testing.T) {
 		if violation.Message != "" {
 			t.Errorf("unexpected message: %+v", violation)
 		}
+	}
+}
+
+func TestErrorMerge(t *testing.T) {
+	type child struct {
+		Name string `k:"name" validate:"required"`
+	}
+	type config struct {
+		Items []child `k:"items" validate:"dive"`
+	}
+	cfg := config{
+		Items: []child{
+			{},
+		},
+	}
+	v := validator.New()
+	v.RegisterTagNameFunc(validation.FieldNames("k"))
+	native := v.Struct(cfg)
+	first := errors.New("first")
+	foreign := errors.New("foreign")
+	var merged validation.Error
+	merged.Merge(nil)
+	if merged.Err() != nil {
+		t.Fatal("nil merge changed empty collector")
+	}
+	merged.Merge(validation.Invalid("manual", "required", "", first))
+	merged.Merge(validation.At("cfg", validation.DottedPaths(validation.FromStruct(cfg, native))))
+	wrapped := fmt.Errorf("wrapped: %w", validation.Invalid("ignored", "required", "", nil))
+	merged.Merge(wrapped)
+	merged.Merge(foreign)
+	want := []apperror.Violation{
+		{
+			Field: "manual",
+			Rule:  "required",
+		},
+		{
+			Field: "cfg.items.0.name",
+			Rule:  "required",
+		},
+	}
+	if !reflect.DeepEqual(merged.Violations, want) {
+		t.Fatalf("violations = %#v", merged.Violations)
+	}
+	var failures validator.ValidationErrors
+	if merged.Err() != &merged || !errors.Is(merged.Err(), first) || !errors.Is(merged.Err(), foreign) ||
+		!errors.Is(merged.Err(), wrapped) || !errors.As(merged.Err(), &failures) {
+		t.Fatalf("causes lost: %v", merged.Err())
+	}
+	var copied *validation.Error
+	if !errors.As(validation.DottedPaths(validation.At("root", merged.Err())), &copied) ||
+		copied.Violations[1].Field != "root.cfg.items.0.name" {
+		t.Fatalf("composition failed: %#v", copied)
 	}
 }
 

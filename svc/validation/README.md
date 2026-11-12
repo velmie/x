@@ -108,7 +108,9 @@ An `InvalidValidationError` is a programming failure, not a field violation.
 ## Field diagnostics
 
 A zero `Error` collects native validation failures with `AddStruct` and plain
-Go checks with `Add`. Both retain their causes. `Err` returns nil when the
+Go checks with `Add`. Both retain their causes. `Merge` adds violations and
+causes from another `Error`, or retains another kind of error as a cause.
+`Err` returns nil when the
 collector is empty. `FromStruct` converts one native result, while `Invalid`
 reports one plain check. `At` copies an error and prefixes its field paths for
 a containing section. Paths and rule parameters must be safe to expose.
