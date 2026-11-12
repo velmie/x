@@ -78,6 +78,10 @@ The module requires Go 1.21 or newer and has no dependencies outside the standar
 performs no I/O, changes no globals, and requires no cleanup. Adding a default key is a documented release change.
 
 Use `NewHandler` to select the standard JSON or text handler and secret-key
-redaction from configuration. Empty settings select JSON and info. The handler
-can be composed with other `slog.Handler` implementations by the application.
+redaction from configuration. Empty settings select JSON and info. Levels are
+debug, info, warn, and error. Formats are JSON and text. Both are case-insensitive.
+The validation tags use `oneofci`. Services using go-playground/validator to
+validate `Config` need a version that supports it. It is absent in v10.22.1 and
+present in v10.27.0. With this release, services do not need to change values
+before validation. The handler can be composed with other `slog.Handler` implementations by the application.
 See `ExampleNewHandler` for a runnable example.

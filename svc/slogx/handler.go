@@ -9,8 +9,8 @@ import (
 
 // Config controls the minimum level and output format of a handler.
 type Config struct {
-	Level  string `k:"level" default:"info" hint:"Minimum log level" validate:"omitempty,oneof=debug info warn error"`
-	Format string `k:"format" default:"json" hint:"Log output format" validate:"omitempty,oneof=json text"`
+	Level  string `k:"level" default:"info" hint:"Minimum log level, case-insensitive" validate:"omitempty,oneofci=debug info warn error"`
+	Format string `k:"format" default:"json" hint:"Log output format, case-insensitive" validate:"omitempty,oneofci=json text"`
 }
 
 // NewHandler returns a JSON or text handler with the standard secret-key redactor.
