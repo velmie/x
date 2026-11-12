@@ -54,8 +54,13 @@ for concurrent writes. See [response](response/readme.md) for error envelopes.
 
 `server.Serve` owns an unused `http.Server` and listener. Configure native
 server settings and create the listener in the service, then call `Serve` with
-its shutdown context. It drains active requests and joins their handlers even
-after the drain deadline. Handlers must finish after their request contexts are
+its shutdown context. On cancellation it immediately closes connections that
+have not delivered a request, including pending TLS handshakes.
+These connections do not consume the drain period. Active requests and idle
+keep-alive connections retain the normal `http.Server.Shutdown` behavior.
+It drains active requests and joins their handlers even after the drain deadline.
+An expired drain remains an error. The caller's `ConnState` hook continues to
+receive every state change. Handlers must finish after their request contexts are
 canceled and join their own work. Detached workers, hijacked connections, and
 shutdown hooks stay with their owners. `Serve` does not attach its context to
 `BaseContext`, since that would cancel active requests before graceful draining.
