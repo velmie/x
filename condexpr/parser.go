@@ -21,11 +21,12 @@ type node struct {
 }
 
 type parser struct {
-	lex   lexer
-	t     token
-	err   error
-	depth int
-	paths []string
+	lex           lexer
+	t             token
+	err           error
+	depth         int
+	paths         []string
+	pathPositions []Position
 }
 
 func (p *parser) next() {
@@ -222,6 +223,7 @@ func (p *parser) atom(t token) *node {
 			return r
 		}, t.text)
 		p.paths = append(p.paths, n.text)
+		p.pathPositions = append(p.pathPositions, t.pos)
 		if p.t.kind == "?" {
 			n.optional = true
 			p.next()

@@ -251,6 +251,7 @@ func TestConcurrentReuseAndInputOwnership(t *testing.T) {
 				}
 				info := expr.Inspect()
 				info.Paths[0] = "changed"
+				info.PathPositions[0] = condexpr.Position{}
 			}
 		}()
 	}

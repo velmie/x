@@ -15,8 +15,10 @@ Evaluation returns `(bool, error)` and never mutates the input. Failure returns
 `false` and an error. Compiled expressions can be reused concurrently when their
 input is not concurrently mutated. `Expr.Inspect().Paths` returns a caller-owned
 list of every canonical path occurrence in source order, including repeated
-paths, optional paths and short-circuited branches. Callers can use this list to
-restrict allowed roots at startup.
+paths, optional paths and short-circuited branches. `Info.PathPositions` is a
+caller-owned slice of the same length and order, identifying the first character
+of each path occurrence in the original source. Callers can use these slices to
+restrict allowed roots at startup and report their positions.
 
 ## Language
 

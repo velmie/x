@@ -129,3 +129,95 @@ func TestInspect(t *testing.T) {
 		t.Fatal("Inspect aliases expression")
 	}
 }
+
+func TestInspectPathPositions(t *testing.T) {
+	for _, tc := range []struct {
+		source    string
+		paths     []string
+		positions []condexpr.Position
+	}{
+		{
+			source: "  !(a? == b) || contains(a, c?)",
+			paths:  []string{"a", "b", "a", "c"},
+			positions: []condexpr.Position{
+				{
+					Offset: 4,
+					Line:   1,
+					Column: 5,
+				},
+				{
+					Offset: 10,
+					Line:   1,
+					Column: 11,
+				},
+				{
+					Offset: 25,
+					Line:   1,
+					Column: 26,
+				},
+				{
+					Offset: 28,
+					Line:   1,
+					Column: 29,
+				},
+			},
+		},
+		{
+			source: "'é' == 'é' &&\r\n  (event.a? ==\n    event.a || starts_with(message.id, 'x'))",
+			paths:  []string{"event.a", "event.a", "message.id"},
+			positions: []condexpr.Position{
+				{
+					Offset: 20,
+					Line:   2,
+					Column: 4,
+				},
+				{
+					Offset: 36,
+					Line:   3,
+					Column: 5,
+				},
+				{
+					Offset: 59,
+					Line:   3,
+					Column: 28,
+				},
+			},
+		},
+		{
+			source: "'é' == 'é' && len( event . items ) > 0",
+			paths:  []string{"event.items"},
+			positions: []condexpr.Position{
+				{
+					Offset: 21,
+					Line:   1,
+					Column: 20,
+				},
+			},
+		},
+		{
+			source: "true == true",
+		},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			expr, err := condexpr.Compile(tc.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info := expr.Inspect()
+			if !reflect.DeepEqual(info.Paths, tc.paths) || !reflect.DeepEqual(info.PathPositions, tc.positions) {
+				t.Fatalf("got %+v; want paths %v, positions %+v", info, tc.paths, tc.positions)
+			}
+			if len(info.Paths) != len(info.PathPositions) {
+				t.Fatal("paths and positions have different lengths")
+			}
+			for i := range info.Paths {
+				info.Paths[i] = "changed"
+				info.PathPositions[i] = condexpr.Position{}
+			}
+			again := expr.Inspect()
+			if !reflect.DeepEqual(again.Paths, tc.paths) || !reflect.DeepEqual(again.PathPositions, tc.positions) {
+				t.Fatal("Inspect slices alias the expression")
+			}
+		})
+	}
+}
