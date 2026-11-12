@@ -15,11 +15,15 @@ import (
 
 // Serve serves on ln, drains on cancellation, and joins admitted handlers.
 // It takes exclusive ownership of an unused srv and ln. The caller configures
-// srv, including any TLS listener, timeouts, BaseContext, ConnContext, and
-// ErrorLog, and must not concurrently call Serve, Shutdown, or Close on srv.
+// srv, including any TLS listener, timeouts, BaseContext, ConnContext, ErrorLog,
+// and ConnState, and must not concurrently call Serve, Shutdown, or Close on srv.
+// Serve chains the caller's ConnState hook.
 // A nil srv.Handler uses http.DefaultServeMux.
 //
-// On cancellation, an independent drain deadline starts. A nonpositive drain
+// On cancellation, an independent drain deadline starts.
+// Connections that have not delivered a request, including pending TLS
+// handshakes, are closed immediately. Active requests and idle keep-alive
+// connections retain the normal http.Server.Shutdown behavior. A nonpositive drain
 // gives no grace period. Clean cancellation returns nil. A drain or listener
 // failure closes active connections. Serve joins its serving goroutine and every
 // admitted handler, even after the drain deadline. Handlers must return after
@@ -33,6 +37,25 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Du
 	var admission sync.Mutex
 	var handlers sync.WaitGroup
 	closed := false
+	stopping := false
+	newConnections := make(map[net.Conn]struct{})
+	connState := srv.ConnState
+	srv.ConnState = func(conn net.Conn, state http.ConnState) {
+		admission.Lock()
+		closeNew := state == http.StateNew && stopping
+		if state == http.StateNew && !stopping {
+			newConnections[conn] = struct{}{}
+		} else {
+			delete(newConnections, conn)
+		}
+		admission.Unlock()
+		if closeNew {
+			_ = conn.Close()
+		}
+		if connState != nil {
+			connState(conn, state)
+		}
+	}
 	next := srv.Handler
 	if next == nil {
 		next = http.DefaultServeMux
@@ -73,6 +96,14 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Du
 		closeErr = srv.Close()
 	case <-ctx.Done():
 		drainCtx, cancel := context.WithTimeout(context.Background(), drain)
+		admission.Lock()
+		stopping = true
+		pending := newConnections
+		newConnections = nil
+		admission.Unlock()
+		for conn := range pending {
+			_ = conn.Close()
+		}
 		drainErr = srv.Shutdown(drainCtx)
 		cancel()
 		if drainErr != nil {
