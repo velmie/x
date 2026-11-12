@@ -237,7 +237,9 @@ func (p *parser) object() (node, error) {
 }
 func (p *parser) path() (pathNode, error) {
 	p.space()
-	result := pathNode{}
+	result := pathNode{
+		pos: p.position(),
+	}
 	var b strings.Builder
 	if p.i < len(p.s) && p.s[p.i] == '.' {
 		p.i++

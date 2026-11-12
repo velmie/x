@@ -7,6 +7,7 @@ type literalNode struct {
 type pathNode struct {
 	steps []step
 	text  string
+	pos   Position
 }
 type objectNode struct {
 	fields []field
