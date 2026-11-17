@@ -126,3 +126,19 @@ func ExampleWithDriverLogger() {
 	cfg.Logger.Print(errors.New("connection interrupted"))
 	// Output: level=WARN msg="Database driver diagnostic" operation=manage_database component=database dependency=mysql stage=driver outcome=failed diagnostic="connection interrupted" error="connection interrupted"
 }
+
+func ExampleIsDuplicateKey() {
+	conflict := errors.New("book already exists")
+	driverErr := &driver.MySQLError{
+		Number: 1062,
+	}
+	// A repository write returns the driver error when the key already exists.
+	writeBook := func() error { return driverErr }
+	err := writeBook()
+	if mysql.IsDuplicateKey(err) {
+		err = fmt.Errorf("create book: %w: %w", conflict, err)
+	}
+	var cause *driver.MySQLError
+	fmt.Println(errors.Is(err, conflict), errors.As(err, &cause), cause == driverErr)
+	// Output: true true true
+}

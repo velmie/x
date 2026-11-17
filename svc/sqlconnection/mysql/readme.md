@@ -134,6 +134,11 @@ parameters follow the driver's last-value behavior. Options run once during asse
 physical connection. Option errors preserve their causes. Native options can deliberately override any driver setting,
 including TLS and credentials.
 
+## Duplicate key errors
+
+Use `IsDuplicateKey(err)` to identify MySQL duplicate primary or unique key errors, including wrapped errors.
+Keep the original error in the chain when mapping it to an application error. See `ExampleIsDuplicateKey`.
+
 ## Integration tests
 
 Unit tests run with `go test ./...`. The `integration` build tag adds real MySQL checks for pool limits, session
