@@ -21,6 +21,7 @@ import (
 
 const integrationServerName = "localhost"
 
+// TestIsDuplicateKeyIntegration requires an explicitly configured disposable MySQL fixture.
 func TestIsDuplicateKeyIntegration(t *testing.T) {
 	cfg := integrationConfig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -31,7 +32,7 @@ func TestIsDuplicateKeyIntegration(t *testing.T) {
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	_, err = conn.ExecContext(ctx, "CREATE TEMPORARY TABLE duplicate_key_test (id INT PRIMARY KEY)")
+	_, err = conn.ExecContext(ctx, "CREATE TEMPORARY TABLE duplicate_key_test (id INT PRIMARY KEY, code INT UNIQUE)")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -39,11 +40,18 @@ func TestIsDuplicateKeyIntegration(t *testing.T) {
 		_, cleanupErr := conn.ExecContext(cleanupCtx, "DROP TEMPORARY TABLE duplicate_key_test")
 		require.NoError(t, cleanupErr)
 	})
-	_, err = conn.ExecContext(ctx, "INSERT INTO duplicate_key_test (id) VALUES (1)")
+	_, err = conn.ExecContext(ctx, "INSERT INTO duplicate_key_test (id, code) VALUES (1, 10), (2, 20)")
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "INSERT INTO duplicate_key_test (id) VALUES (1)")
-	require.Error(t, err)
-	require.True(t, connection.IsDuplicateKey(err))
+	for _, query := range []string{
+		"INSERT INTO duplicate_key_test (id, code) VALUES (1, 30)",
+		"INSERT INTO duplicate_key_test (id, code) VALUES (3, 10)",
+		"UPDATE duplicate_key_test SET id = 1 WHERE id = 2",
+		"UPDATE duplicate_key_test SET code = 10 WHERE id = 2",
+	} {
+		_, err = conn.ExecContext(ctx, query)
+		require.Error(t, err)
+		require.Truef(t, connection.IsDuplicateKey(err), "%v", err)
+	}
 }
 
 // TestConnectionIntegration requires an explicitly configured disposable MySQL fixture.

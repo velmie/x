@@ -137,14 +137,16 @@ including TLS and credentials.
 ## Duplicate key errors
 
 Use `IsDuplicateKey(err)` to identify MySQL duplicate primary or unique key errors, including wrapped errors.
+It recognizes error 1062 only; error text is not inspected.
 Keep the original error in the chain when mapping it to an application error. See `ExampleIsDuplicateKey`.
 
 ## Integration tests
 
 Unit tests run with `go test ./...`. The `integration` build tag adds real MySQL checks for pool limits, session
-settings, per-connection credentials, TLS isolation and verification, and IPv6. Use a disposable MySQL server with
+settings, per-connection credentials, TLS isolation and verification, IPv6, and duplicate key errors. Use a disposable MySQL server with
 TLS 1.2 and 1.3 enabled and a certificate valid for `localhost`. Prepare the fictitious account and schema declared in
-`connection_integration_test.go`. Set `MYSQL_INTEGRATION_HOST`, `MYSQL_INTEGRATION_PORT`, and `MYSQL_INTEGRATION_CA`,
+`connection_integration_test.go`. The fixture account needs `CREATE TEMPORARY TABLES` on the fixture schema.
+Set `MYSQL_INTEGRATION_HOST`, `MYSQL_INTEGRATION_PORT`, and `MYSQL_INTEGRATION_CA`,
 then run `go test -race -tags integration ./...`. Set `MYSQL_INTEGRATION_IPV6_HOST` to an unbracketed IPv6 address to
 also exercise IPv6. Tests skip when the fixture is not configured. Never target a production server.
 

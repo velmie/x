@@ -128,17 +128,21 @@ func ExampleWithDriverLogger() {
 }
 
 func ExampleIsDuplicateKey() {
-	conflict := errors.New("book already exists")
+	errBookExists := errors.New("book already exists")
 	driverErr := &driver.MySQLError{
-		Number: 1062,
+		Number:   1062,
+		SQLState: [5]byte{'2', '3', '0', '0', '0'},
+		Message:  "Duplicate entry '123' for key 'books.PRIMARY'",
 	}
-	// A repository write returns the driver error when the key already exists.
+	// A repository write returns the driver error when the book already exists.
 	writeBook := func() error { return driverErr }
 	err := writeBook()
 	if mysql.IsDuplicateKey(err) {
-		err = fmt.Errorf("create book: %w: %w", conflict, err)
+		err = fmt.Errorf("create book: %w: %w", errBookExists, err)
 	}
-	var cause *driver.MySQLError
-	fmt.Println(errors.Is(err, conflict), errors.As(err, &cause), cause == driverErr)
-	// Output: true true true
+	fmt.Println(errors.Is(err, errBookExists))
+	fmt.Println(err)
+	// Output:
+	// true
+	// create book: book already exists: Error 1062 (23000): Duplicate entry '123' for key 'books.PRIMARY'
 }
