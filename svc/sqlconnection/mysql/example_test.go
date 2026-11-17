@@ -126,3 +126,23 @@ func ExampleWithDriverLogger() {
 	cfg.Logger.Print(errors.New("connection interrupted"))
 	// Output: level=WARN msg="Database driver diagnostic" operation=manage_database component=database dependency=mysql stage=driver outcome=failed diagnostic="connection interrupted" error="connection interrupted"
 }
+
+func ExampleIsDuplicateKey() {
+	errBookExists := errors.New("book already exists")
+	driverErr := &driver.MySQLError{
+		Number:   1062,
+		SQLState: [5]byte{'2', '3', '0', '0', '0'},
+		Message:  "Duplicate entry '123' for key 'books.PRIMARY'",
+	}
+	// A repository write returns the driver error when the book already exists.
+	writeBook := func() error { return driverErr }
+	err := writeBook()
+	if mysql.IsDuplicateKey(err) {
+		err = fmt.Errorf("create book: %w: %w", errBookExists, err)
+	}
+	fmt.Println(errors.Is(err, errBookExists))
+	fmt.Println(err)
+	// Output:
+	// true
+	// create book: book already exists: Error 1062 (23000): Duplicate entry '123' for key 'books.PRIMARY'
+}
